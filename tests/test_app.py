@@ -129,6 +129,27 @@ def test_chat_endpoint_reports_llm_failure(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "Ollama недоступна" in response.text
     assert prompts.DISCLAIMER[:30] in response.text
+    # Pin: a generic exception handler must not flatten this actionable,
+    # cause-specific message into the generic "unexpected error" text.
+    assert app_module.GENERIC_ERROR not in response.text
+
+
+def test_chat_endpoint_handles_unexpected_error(tmp_path, monkeypatch):
+    """retriever.search runs an embedding call and two SQL queries — at least
+    as likely to fail as llm.complete, which already gets friendly handling.
+    A bare RuntimeError here must not leak to a Starlette default 500 page."""
+    monkeypatch.setattr(app_module, "get_connection", lambda: _seed(tmp_path))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("índex corrupted: disk I/O error")
+
+    monkeypatch.setattr(app_module.retriever, "search", boom)
+    client = TestClient(app_module.app, raise_server_exceptions=False)
+    response = client.post("/chat", data={"question": "вопрос"})
+    assert response.status_code == 200
+    assert "disk I/O error" not in response.text
+    assert "Internal Server Error" not in response.text
+    assert prompts.DISCLAIMER[:30] in response.text
 
 
 def test_index_page_lists_corpus(tmp_path, monkeypatch):
@@ -137,3 +158,52 @@ def test_index_page_lists_corpus(tmp_path, monkeypatch):
     response = client.get("/")
     assert response.status_code == 200
     assert "Трудовой кодекс" in response.text
+
+
+def test_index_page_handles_db_error(tmp_path, monkeypatch):
+    """db.corpus_summary raising must not leak Starlette's bare 500 page —
+    the user must still see a Russian message with the disclaimer."""
+    monkeypatch.setattr(app_module, "get_connection", lambda: _seed(tmp_path))
+
+    def boom(conn):
+        raise RuntimeError("database disk image is malformed")
+
+    monkeypatch.setattr(app_module.db, "corpus_summary", boom)
+    client = TestClient(app_module.app, raise_server_exceptions=False)
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "database disk image is malformed" not in response.text
+    assert "Internal Server Error" not in response.text
+    assert prompts.DISCLAIMER[:30] in response.text
+
+
+class _ClosableConnProxy:
+    """sqlite3.Connection instances don't allow per-instance attribute
+    overrides (its methods are read-only slots), so wrap it to observe
+    whether .close() was actually called."""
+
+    def __init__(self, real):
+        self._real = real
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+        self._real.close()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_index_closes_connection_even_when_it_raises(tmp_path, monkeypatch):
+    """The connection must be closed even when the route raises — assert
+    this directly instead of inferring it from the response."""
+    proxy = _ClosableConnProxy(_seed(tmp_path))
+    monkeypatch.setattr(app_module, "get_connection", lambda: proxy)
+
+    def boom(_conn):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(app_module.db, "corpus_summary", boom)
+    client = TestClient(app_module.app, raise_server_exceptions=False)
+    client.get("/")
+    assert proxy.closed is True

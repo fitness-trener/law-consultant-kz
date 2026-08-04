@@ -27,14 +27,18 @@
 </section>
 
 <aside class="corpus">
-  <h2>Загруженные НПА ({{ acts|length }})</h2>
-  <ul>
-    {% for title, revision in acts %}
-      <li>{{ title }} <span class="rev">ред. {{ revision or 'не определена' }}</span></li>
-    {% else %}
-      <li class="empty">Индекс пуст. Выполните: <code>python cli.py scrape &amp;&amp; python cli.py index</code></li>
-    {% endfor %}
-  </ul>
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% else %}
+    <h2>Загруженные НПА ({{ acts|length }})</h2>
+    <ul>
+      {% for title, revision in acts %}
+        <li>{{ title }} <span class="rev">ред. {{ revision or 'не определена' }}</span></li>
+      {% else %}
+        <li class="empty">Индекс пуст. Выполните: <code>python cli.py scrape &amp;&amp; python cli.py index</code></li>
+      {% endfor %}
+    </ul>
+  {% endif %}
 </aside>
 
 <script>

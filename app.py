@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Iterator
 
-from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -28,11 +28,26 @@ app = FastAPI(title="Юридический консультант по НПА �
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 
+# Shown for any unexpected failure on a user-facing page: never the actual
+# exception text (that goes to the log only), always Russian, always paired
+# with prompts.DISCLAIMER by the caller.
+GENERIC_ERROR = "Произошла непредвиденная ошибка на сервере. Повторите запрос позже."
+
 
 def get_connection() -> sqlite3.Connection:
     conn = db.connect()
     db.create_schema(conn)
     return conn
+
+
+def db_conn() -> Iterator[sqlite3.Connection]:
+    """Shared try/finally discipline for routes that need a DB connection:
+    guarantees conn.close() runs even if the route raises."""
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def answer_question(conn: sqlite3.Connection, question: str) -> dict:
@@ -44,10 +59,15 @@ def answer_question(conn: sqlite3.Connection, question: str) -> dict:
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    conn = get_connection()
-    acts = db.corpus_summary(conn)
-    conn.close()
+def index(request: Request, conn: sqlite3.Connection = Depends(db_conn)):
+    try:
+        acts = db.corpus_summary(conn)
+    except Exception:
+        logger.exception("Ошибка получения списка НПА")
+        return templates.TemplateResponse(
+            "index.html",
+            {"request": request, "acts": [], "error": GENERIC_ERROR, "disclaimer": prompts.DISCLAIMER},
+        )
     return templates.TemplateResponse(
         "index.html",
         {"request": request, "acts": acts, "disclaimer": prompts.DISCLAIMER},
@@ -55,14 +75,13 @@ def index(request: Request):
 
 
 @app.post("/chat", response_class=HTMLResponse)
-def chat(request: Request, question: str = Form(...)):
+def chat(request: Request, question: str = Form(...), conn: sqlite3.Connection = Depends(db_conn)):
     question = question.strip()
     if not question:
         return templates.TemplateResponse(
             "_answer.html",
             {"request": request, "error": "Введите вопрос.", "disclaimer": prompts.DISCLAIMER},
         )
-    conn = get_connection()
     try:
         result = answer_question(conn, question)
     except llm.LLMError as exc:
@@ -70,8 +89,12 @@ def chat(request: Request, question: str = Form(...)):
             "_answer.html",
             {"request": request, "error": str(exc), "disclaimer": prompts.DISCLAIMER},
         )
-    finally:
-        conn.close()
+    except Exception:
+        logger.exception("Ошибка при обработке вопроса")
+        return templates.TemplateResponse(
+            "_answer.html",
+            {"request": request, "error": GENERIC_ERROR, "disclaimer": prompts.DISCLAIMER},
+        )
     return templates.TemplateResponse(
         "_answer.html",
         {
