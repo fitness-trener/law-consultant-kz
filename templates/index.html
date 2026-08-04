@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="tabs">
+  <button class="tab active" data-target="pane-chat">Консультация</button>
+  <button class="tab" data-target="pane-doc">Документ</button>
+</nav>
+
+<section id="pane-chat" class="pane">
+  <form hx-post="/chat" hx-target="#answer" hx-indicator="#spinner">
+    <textarea name="question" rows="3" placeholder="Например: обязателен ли письменный трудовой договор?"></textarea>
+    <button type="submit">Спросить</button>
+    <span id="spinner" class="htmx-indicator">Модель думает…</span>
+  </form>
+  <div id="answer"></div>
+</section>
+
+<section id="pane-doc" class="pane" hidden>
+  <p>Загрузка документов подключается в следующей задаче.</p>
+</section>
+
+<aside class="corpus">
+  <h2>Загруженные НПА ({{ acts|length }})</h2>
+  <ul>
+    {% for title, revision in acts %}
+      <li>{{ title }} <span class="rev">ред. {{ revision or 'не определена' }}</span></li>
+    {% else %}
+      <li class="empty">Индекс пуст. Выполните: <code>python cli.py scrape &amp;&amp; python cli.py index</code></li>
+    {% endfor %}
+  </ul>
+</aside>
+
+<script>
+document.querySelectorAll('.tab').forEach(function (tab) {
+  tab.addEventListener('click', function () {
+    document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
+    document.querySelectorAll('.pane').forEach(function (p) { p.hidden = true; });
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.target).hidden = false;
+  });
+});
+</script>
+{% endblock %}
