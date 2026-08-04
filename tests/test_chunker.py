@@ -45,6 +45,10 @@ def test_oversized_single_point_is_hard_split():
     chunks = chunk_article(_article(body), max_chars=800)
     assert len(chunks) > 1
     assert all(len(c.text) <= 1000 for c in chunks)
+    # Finding 4: единственный пронумерованный пункт — это всё ещё нумерация,
+    # а не повод для фолбэка. Фрагменты одного пункта 1 должны все нести
+    # его настоящий номер, а не выдуманную последовательную нумерацию.
+    assert all(c.part_no == "1" for c in chunks)
 
 
 def test_tiny_article_is_kept():
@@ -84,3 +88,63 @@ def test_chunk_act_processes_all_articles():
 def test_whitespace_is_normalized():
     art = _article("текст   с\n\n\nлишними    пробелами")
     assert "  " not in chunk_article(art)[0].text
+
+
+def test_lead_in_before_first_point_is_not_dropped():
+    """Finding 1: преамбула до первого пронумерованного пункта ('...следующие
+    условия:') раньше не попадала ни в один кусок и терялась безвозвратно.
+    """
+    lead = "Трудовой договор должен содержать следующие условия:"
+    body = (
+        lead
+        + "\n1. " + "Пункт первый содержит развёрнутую норму. " * 30
+        + "\n2. " + "Пункт второй тоже развёрнутый. " * 30
+    )
+    chunks = chunk_article(_article(body), max_chars=900)
+    assert any(lead in c.text for c in chunks)
+
+
+def test_hard_split_fragment_never_exceeds_max_chars():
+    """Finding 2: бюджет `_hard_split` игнорировал перевод строки между
+    заголовком и телом (off-by-one), а короткий хвост клеился к предыдущему
+    без проверки итогового размера — оба пути могли дать чанк больше max_chars.
+    """
+    art = _article(
+        "Норма права устанавливает порядок применения статьи в соответствующих случаях далее. " * 70,
+        title="Оплата труда",
+    )
+    chunks = chunk_article(art, max_chars=2000, min_chars=100)
+    assert len(chunks) > 1
+    assert all(len(c.text) <= 2000 for c in chunks)
+
+
+def test_short_first_point_merges_forward_into_next():
+    """Finding 3: если короткий пункт стоит первым, приклеивать его назад
+    не к чему, и он раньше уезжал в чанк ниже min_chars. Теперь он должен
+    склеиться со следующим пунктом и взять его номер.
+    """
+    body = (
+        "1. Утратил силу.\n2. "
+        + "Развернутая норма права применяется в установленном порядке. " * 40
+    )
+    chunks = chunk_article(_article(body))
+    assert "1" not in [c.part_no for c in chunks]
+    assert chunks[0].part_no == "2"
+    assert "Утратил силу" in chunks[0].text
+
+
+def test_no_text_is_lost_across_chunks():
+    """Конкатенация всех чанков должна содержать каждое слово исходной статьи —
+    это главная гарантия модуля: ретривер не должен молча терять текст закона.
+    """
+    body = (
+        "Трудовой договор должен содержать следующие условия:\n"
+        "1. Место работы. "
+        + "Развёрнутая норма права применяется в установленном порядке. " * 5
+        + "\n2. Оплата труда. "
+        + "Норма права устанавливает порядок применения статьи. " * 40
+    )
+    chunks = chunk_article(_article(body), max_chars=800, min_chars=100)
+    corpus = " ".join(c.text for c in chunks)
+    for word in " ".join(body.split()).split(" "):
+        assert word in corpus
