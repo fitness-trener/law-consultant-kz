@@ -112,6 +112,21 @@ def test_answer_question_refuses_without_hits(tmp_path, monkeypatch):
     assert called["llm"] is False
 
 
+def test_answer_question_reports_empty_corpus_distinctly(tmp_path, monkeypatch):
+    """Finding 2: пустой индекс (например, из-за неверного DB_PATH — see
+    get_connection(), которая молча создаёт пустую схему) не должен выглядеть
+    как обычный "нет такой нормы в корпусе" отказ. Пользователь должен
+    получить понятный сигнал, что корпус вообще не собран."""
+    conn = db.connect(tmp_path / "empty.db")
+    db.create_schema(conn)
+    monkeypatch.setattr(app_module.retriever, "search", lambda *a, **kw: [])
+
+    result = app_module.answer_question(conn, "трудовой договор")
+
+    assert result["refused"] is True
+    assert result["answer"] == prompts.EMPTY_CORPUS_REFUSAL
+
+
 def test_chat_endpoint_renders_answer(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "get_connection", lambda: _seed(tmp_path))
     monkeypatch.setattr(app_module.retriever, "search", lambda *a, **kw: [_hit()])
@@ -194,6 +209,24 @@ def test_index_page_handles_db_error(tmp_path, monkeypatch):
     response = client.get("/")
     assert response.status_code == 200
     assert "database disk image is malformed" not in response.text
+    assert "Internal Server Error" not in response.text
+    assert prompts.DISCLAIMER[:30] in response.text
+
+
+def test_dependency_failure_before_route_body_gets_russian_error(monkeypatch):
+    """Finding 3: a failure inside get_connection() itself — before db_conn
+    yields, so before any route body runs at all — escapes every route-level
+    try/except and used to reach the user as Starlette's bare English
+    "Internal Server Error". Only an app-level exception handler can catch
+    this, since there is no route body left to catch it in."""
+    def boom():
+        raise RuntimeError("no such table: acts")
+
+    monkeypatch.setattr(app_module, "get_connection", boom)
+    client = TestClient(app_module.app, raise_server_exceptions=False)
+    response = client.get("/")
+    assert response.status_code == 500
+    assert "no such table" not in response.text
     assert "Internal Server Error" not in response.text
     assert prompts.DISCLAIMER[:30] in response.text
 

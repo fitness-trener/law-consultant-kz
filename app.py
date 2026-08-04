@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Iterator
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import analyzer
 import db
@@ -34,6 +35,33 @@ templates = Jinja2Templates(directory=ROOT / "templates")
 GENERIC_ERROR = "Произошла непредвиденная ошибка на сервере. Повторите запрос позже."
 
 
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    # POST /analyze's JS caller reads `detail` straight off the JSON body
+    # (see templates/index.html) — that contract must survive untouched.
+    if request.url.path == "/analyze":
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return templates.TemplateResponse(
+        "_error.html",
+        {"request": request, "error": exc.detail, "disclaimer": prompts.DISCLAIMER},
+        status_code=exc.status_code,
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    # Catches what route-level try/except can't: an exception raised inside a
+    # dependency (e.g. get_connection() failing in db_conn) before any route
+    # body runs, which otherwise reaches the user as Starlette's bare English
+    # "Internal Server Error" — never Russian, never carrying the disclaimer.
+    logger.exception("Необработанная ошибка на %s", request.url.path)
+    return templates.TemplateResponse(
+        "_error.html",
+        {"request": request, "error": GENERIC_ERROR, "disclaimer": prompts.DISCLAIMER},
+        status_code=500,
+    )
+
+
 def get_connection() -> sqlite3.Connection:
     conn = db.connect()
     db.create_schema(conn)
@@ -53,6 +81,11 @@ def db_conn() -> Iterator[sqlite3.Connection]:
 def answer_question(conn: sqlite3.Connection, question: str) -> dict:
     hits = retriever.search(conn, question, k=4)
     if not hits:
+        # A wrong DB_PATH (or a build that never ran) silently creates an
+        # empty schema via get_connection() — that must read as "corpus not
+        # built", not as the ordinary "no relevant norm for this question".
+        if not db.corpus_summary(conn):
+            return {"answer": prompts.EMPTY_CORPUS_REFUSAL, "sources": [], "refused": True}
         return {"answer": prompts.REFUSAL, "sources": [], "refused": True}
     answer = llm.complete(prompts.build_consultation_messages(question, hits))
     # The retrieved chunks themselves contain cross-references ("статьёй 40

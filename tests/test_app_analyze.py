@@ -179,6 +179,19 @@ def test_report_for_unknown_job_returns_404(client):
     assert client.get("/analyze/нет-такого/report").status_code == 404
 
 
+def test_report_for_unknown_job_renders_russian_error_with_disclaimer(client):
+    """Finding 3: after a restart JOBS is empty, so this 404 fires on every
+    real report link a user still has open. Raw JSON (`{"detail": "..."}`)
+    injected verbatim via report.innerHTML — as the current HTTPException
+    handling does — must become a Russian error view carrying the
+    disclaimer, without losing the status code or the existing detail text."""
+    response = client.get("/analyze/нет-такого/report")
+    assert response.status_code == 404
+    assert "Задача не найдена" in response.text
+    assert '"detail"' not in response.text
+    assert "Справочная информация" in response.text
+
+
 def test_stale_upload_swept_but_active_job_kept(client, monkeypatch, tmp_path):
     upload_dir = tmp_path / "uploads"
     upload_dir.mkdir()

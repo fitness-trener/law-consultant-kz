@@ -83,3 +83,32 @@ def test_prune_removed_sources_keeps_acts_still_in_sources(tmp_path):
 
     assert removed == []
     assert conn.execute("SELECT COUNT(*) FROM acts").fetchone()[0] == 1
+
+
+def test_status_reports_sources_missing_from_index(tmp_path, monkeypatch, capsys):
+    """Finding 2: индекс, собранный лишь частично (скрейп/индексация упали на
+    части источников и продолжили корпус — см. cmd_scrape/index_directory),
+    не должен выглядеть как полный. cmd_status обязан сверить акты в индексе
+    со списком sources.yaml и назвать недостающие."""
+    conn = _conn(tmp_path)
+    indexer.index_act(
+        conn, _act("civil_code_general", "https://adilet.zan.kz/rus/docs/K940001000_"),
+        embed_fn=_fake_embed,
+    )
+    monkeypatch.setattr(cli.db, "connect", lambda: conn)
+    monkeypatch.setattr(
+        cli,
+        "load_sources",
+        lambda: [
+            Source(key="civil_code_general", title="Акт «civil_code_general»",
+                   url="https://adilet.zan.kz/rus/docs/K940001000_", doc_type="кодекс"),
+            Source(key="labour_code", title="Трудовой кодекс Республики Казахстан",
+                   url="https://adilet.zan.kz/rus/docs/K1500000414", doc_type="кодекс"),
+        ],
+    )
+
+    exit_code = cli.cmd_status()
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "Трудовой кодекс Республики Казахстан" in output

@@ -166,10 +166,75 @@ def test_ubiquitous_domain_word_does_not_bypass_relevance_floor(tmp_path):
     assert hits == []
 
 
+def _corpus_generic_word_act(count: int = 15) -> Act:
+    """count-1 обычных статей плюс одна с перекрёстной ссылкой на "настоящий
+    кодекс" — родовое имя акта, не признак темы запроса. Доля чанков с этим
+    словом (1/15 ≈ 6.7%) специально выбрана внутри старой полосы
+    [MIN_DISCRIMINATIVE_DF_FRACTION, DISCRIMINATIVE_DF_FRACTION) = [1%, 10%):
+    раньше это заставляло df-порог считать "кодекс" различимым термином и
+    спасать им нерелевантный запрос, независимо от нижней границы."""
+    articles = [
+        Article(
+            number=str(i),
+            title=f"Статья {i}",
+            anchor=f"z{i}",
+            text=f"Договор и ежегодный отпуск регулируются нормой номер {i}. " * 3,
+        )
+        for i in range(1, count)
+    ]
+    articles.append(
+        Article(
+            number=str(count),
+            title=f"Статья {count}",
+            anchor=f"z{count}",
+            text=(
+                "Договор и ежегодный отпуск регулируются с учётом положений "
+                "настоящего кодекс и иных актов. "
+            )
+            * 3,
+        )
+    )
+    return Act(
+        key="corpus_generic_word",
+        title="Тестовый акт",
+        url="https://example.test/act",
+        doc_type="кодекс",
+        articles=articles,
+    )
+
+
+def test_corpus_generic_word_kodeks_does_not_bypass_relevance_floor(tmp_path):
+    """"Кодекс" — родовое имя акта в этом корпусе, а не признак темы запроса
+    (Finding 1). Он должен быть исключён через STOPWORDS безусловно, а не
+    полагаться на то, попадает ли его df в полосу различимости — иначе
+    запрос про рецепт борща со словом "кодекс" снова "спасается" ссылкой на
+    статью, у которой нет ничего общего с темой запроса."""
+    conn = db.connect(tmp_path / "generic.db")
+    db.create_schema(conn)
+    indexer.index_act(conn, _corpus_generic_word_act(), embed_fn=_embed)
+
+    hits = retriever.search(
+        conn,
+        "рецепт борща кодекс",
+        k=4,
+        embed_fn=lambda texts: [[0.0] * 1024 for _ in texts],
+    )
+    assert hits == []
+
+
 def test_rare_term_still_rescued_by_fts_when_vector_is_weak(tmp_path):
     """В отличие от вездесущего слова, термин, редкий для корпуса (доля
     чанков с ним ниже DISCRIMINATIVE_DF_FRACTION), — реальный сигнал
-    релевантности и должен пробивать порог даже при слабом векторе."""
+    релевантности и должен пробивать порог даже при слабом векторе.
+
+    Раньше здесь было 11 filler-статей (target = 1/12 ≈ 8.3% корпуса) — доля
+    попадала в полосу [0.01, 0.10) случайно, из-за размера самой фикстуры:
+    та же абсолютная частота термина на реальном корпусе (17978 чанков)
+    давала бы долю на два порядка меньше и отсекалась бы прежней нижней
+    границей MIN_DISCRIMINATIVE_DF_FRACTION. 199 filler-статей делают долю
+    (1/200 = 0.5%) заведомо ниже той прежней границы — тест проверяет
+    правило «редкое — значит различимое», а не то, что фикстура случайно
+    попала в полосу."""
     filler = [
         Article(
             number=str(i),
@@ -177,7 +242,7 @@ def test_rare_term_still_rescued_by_fts_when_vector_is_weak(tmp_path):
             anchor=f"z{i}",
             text=f"Общая норма трудового законодательства номер {i}. " * 3,
         )
-        for i in range(1, 12)
+        for i in range(1, 200)
     ]
     target = Article(
         number="152",
@@ -198,7 +263,7 @@ def test_rare_term_still_rescued_by_fts_when_vector_is_weak(tmp_path):
     # Каждый чанк получает свою координату при индексации (счётчик идёт по
     # порядку статей), а запрос — заведомо другую: косинусная близость к
     # любому чанку равна 0, спасти запрос может только FTS.
-    counter = iter(range(12))
+    counter = iter(range(len(filler) + 1))
 
     def index_embed(texts):
         vectors = []

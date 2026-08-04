@@ -81,6 +81,17 @@ def cmd_status() -> int:
     print(f"НПА в индексе: {len(acts)}, чанков: {total}\n")
     for title, revision in acts:
         print(f"  {title} — ред. {revision or 'не определена'}")
+
+    # Индекс может быть непустым, но недособранным — часть источников из
+    # sources.yaml не попала внутрь (скрейп/индексация упали на части актов,
+    # см. cmd_scrape/index_directory, которые продолжают корпус и репортят
+    # сбой, а не останавливают весь прогон). Без этой сверки такой корпус
+    # выглядит как полный.
+    indexed_titles = {title for title, _ in acts}
+    missing = [s.title for s in load_sources() if s.title not in indexed_titles]
+    if missing:
+        print(f"\nОтсутствуют в индексе: {', '.join(missing)}")
+        return 1
     return 0
 
 
