@@ -267,6 +267,37 @@ def test_article_match_requires_matching_act(monkeypatch):
     assert "Трудового" in finding.norm_ref
 
 
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("согласно статье 88 ТК РК", ["88"]),  # дательный падеж
+        ("в соответствии со статьёй 88 ТК РК", ["88"]),  # творительный (ё)
+        ("в соответствии со статьей 88 ТК РК", ["88"]),  # творительный (без ё)
+        ("на основании статьи 88 ТК РК", ["88"]),  # родительный падеж
+        ("ст. 88 ТК РК", ["88"]),  # аббревиатура
+        ("смотрите статью 88 ТК РК", ["88"]),  # винительный падеж
+        ("статья 152-1 Трудового кодекса", ["152-1"]),  # суффикс сохраняется
+    ],
+)
+def test_extract_article_numbers_covers_inflected_forms(text, expected):
+    """Регулярка ловит только именительный "статья" — почти не встречается в
+    живой речи модели. Каждый из этих падежей/аббревиатура должен совпадать,
+    иначе корректный, процитированный ответ отбрасывается как безосновательный
+    (см. app.answer_question)."""
+    assert analyzer.extract_article_numbers(text) == expected
+
+
+def test_extract_article_numbers_mixed_sentence_citing_two_articles():
+    text = "Отпуск регулируется статьями 88 и 90 Трудового кодекса Республики Казахстан."
+    assert analyzer.extract_article_numbers(text) == ["88", "90"]
+
+
+def test_extract_article_numbers_ignores_unrelated_numbers():
+    """Число без слова "статья"/"ст." рядом — не ссылка на норму, и не должно
+    подхватываться (иначе любое число в ответе выглядело бы как цитата)."""
+    assert analyzer.extract_article_numbers("Стороны заключили 88 договоров") == []
+
+
 def test_analyze_document_counts_missing_risk_as_skipped(monkeypatch):
     """Модель не вернула поле risk вовсе — это пропуск пункта, а не
     отсутствие риска, и analyze_document должен это отразить, не просто

@@ -81,6 +81,21 @@ def test_answer_question_returns_answer_with_sources(tmp_path, monkeypatch):
     assert len(result["sources"]) == 1
 
 
+def test_answer_question_accepts_abbreviated_citation(tmp_path, monkeypatch):
+    """Регресс: модель нередко цитирует только аббревиатурой ("ст. 88"), без
+    именительного "статья" — правильный, процитированный ответ не должен
+    отбрасываться как безосновательный только из-за формы ссылки."""
+    conn = _seed(tmp_path)
+    monkeypatch.setattr(app_module.retriever, "search", lambda *a, **kw: [_hit(article_no="30")])
+    monkeypatch.setattr(
+        app_module.llm,
+        "complete",
+        lambda messages, **kw: "Да, требуется письменная форма (ст. 30 ТК РК).",
+    )
+    result = app_module.answer_question(conn, "Нужен ли письменный договор?")
+    assert result["refused"] is False
+
+
 def test_answer_question_refuses_when_citation_not_retrieved(tmp_path, monkeypatch):
     """Модель сослалась на статью 999, которой не было среди найденных норм —
     правдоподобная фабрикация, которую и обязан ловить дизайн этого сервиса."""
