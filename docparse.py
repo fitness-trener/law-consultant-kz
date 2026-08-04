@@ -7,6 +7,14 @@ from pathlib import Path
 
 CLAUSE_RE = re.compile(r"(?m)^\s*((?:\d+\.)+|\d+\)|Статья\s+\d+\.|§\s*\d+\.)\s*")
 
+# Clause number given to text preceding the first numbered clause (title,
+# parties, preamble). Distinct from any real numbering the regex above matches.
+PREAMBLE_CLAUSE_NO = "преамбула"
+
+# Below this length, extracted PDF text is treated as scan noise (stray page
+# numbers, header fragments, OCR artefacts) rather than a real text layer.
+MIN_TEXT_LENGTH = 200
+
 
 class DocParseError(RuntimeError):
     """Документ невозможно разобрать — текст показывается пользователю."""
@@ -20,15 +28,24 @@ class Clause:
 
 def _docx_text(path: Path) -> str:
     from docx import Document
+    from docx.oxml.ns import qn
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
 
     document = Document(str(path))
-    lines = [p.text.strip() for p in document.paragraphs]
-    for table in document.tables:
-        for row in table.rows:
-            cells = [c.text.strip() for c in row.cells if c.text.strip()]
-            if cells:
-                lines.append(" | ".join(cells))
-    return "\n".join(line for line in lines if line)
+    lines: list[str] = []
+    for child in document.element.body.iterchildren():
+        if child.tag == qn("w:p"):
+            text = Paragraph(child, document).text.strip()
+            if text:
+                lines.append(text)
+        elif child.tag == qn("w:tbl"):
+            table = Table(child, document)
+            for row in table.rows:
+                cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                if cells:
+                    lines.append(" | ".join(cells))
+    return "\n".join(lines)
 
 
 def _pdf_text(path: Path) -> str:
@@ -55,6 +72,9 @@ def split_clauses(text: str, max_clauses: int = 300) -> list[Clause]:
     clauses: list[Clause] = []
 
     if len(matches) >= 2:
+        leading = re.sub(r"\s+", " ", text[: matches[0].start()]).strip()
+        if leading:
+            clauses.append(Clause(no=PREAMBLE_CLAUSE_NO, text=leading))
         for i, match in enumerate(matches):
             end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
             body = text[match.end() : end].strip()
@@ -77,7 +97,7 @@ def split_clauses(text: str, max_clauses: int = 300) -> list[Clause]:
 
 def parse_document(path: Path, max_clauses: int = 300) -> list[Clause]:
     text = extract_text(path)
-    if not text.strip():
+    if len(text.strip()) < MIN_TEXT_LENGTH:
         raise DocParseError(
             "В файле нет текстового слоя. Похоже, это скан — "
             "распознавание изображений не поддерживается."

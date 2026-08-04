@@ -77,3 +77,68 @@ def test_pdf_without_text_layer_reports_scan(tmp_path, monkeypatch):
     monkeypatch.setattr(docparse, "_pdf_text", lambda p: "   \n  ")
     with pytest.raises(docparse.DocParseError, match="скан"):
         docparse.parse_document(path)
+
+
+def test_preamble_before_first_clause_is_kept(contract):
+    clauses = docparse.parse_document(contract)
+    assert any(
+        c.no == docparse.PREAMBLE_CLAUSE_NO
+        and "ДОГОВОР ВОЗМЕЗДНОГО ОКАЗАНИЯ УСЛУГ" in c.text
+        for c in clauses
+    )
+    # numbered clauses still parse correctly around the preamble
+    assert [c.no for c in clauses if c.no != docparse.PREAMBLE_CLAUSE_NO] == [
+        "1.",
+        "1.1.",
+        "1.2.",
+        "2.",
+        "2.1.",
+        "2.2.",
+    ]
+
+
+@pytest.fixture
+def contract_with_table(tmp_path) -> Path:
+    doc = Document()
+    doc.add_paragraph("ДОГОВОР ВОЗМЕЗДНОГО ОКАЗАНИЯ УСЛУГ")
+    doc.add_paragraph("1. Предмет договора")
+    doc.add_paragraph(
+        "1.1. Исполнитель обязуется оказать услуги по разработке "
+        "программного обеспечения в соответствии с техническим заданием."
+    )
+    table = doc.add_table(rows=1, cols=2)
+    table.cell(0, 0).text = "Услуга"
+    table.cell(0, 1).text = "Цена"
+    doc.add_paragraph("2. Стоимость и порядок расчётов")
+    doc.add_paragraph(
+        "2.1. Стоимость услуг составляет 1 000 000 тенге и оплачивается "
+        "в течение 90 банковских дней с момента подписания акта."
+    )
+    path = tmp_path / "contract_with_table.docx"
+    doc.save(path)
+    return path
+
+
+def test_docx_table_stays_with_preceding_clause(contract_with_table):
+    clauses = docparse.parse_document(contract_with_table)
+    by_no = {c.no: c.text for c in clauses}
+    assert "Услуга | Цена" in by_no["1.1."]
+    assert "Услуга" not in by_no["2.1."]
+    assert "Цена" not in by_no["2.1."]
+
+
+def test_pdf_with_sliver_of_text_reports_scan(tmp_path, monkeypatch):
+    path = tmp_path / "scan.pdf"
+    path.write_bytes(b"%PDF-1.4 fake")
+    # Stray OCR noise / page number: real but far too short to be a contract.
+    monkeypatch.setattr(docparse, "_pdf_text", lambda p: "Стр. 3")
+    with pytest.raises(docparse.DocParseError, match="скан"):
+        docparse.parse_document(path)
+
+
+def test_no_text_loss(contract):
+    text = docparse.extract_text(contract)
+    clauses = docparse.parse_document(contract)
+    produced = " ".join(f"{c.no} {c.text}" for c in clauses)
+    for word in text.split():
+        assert word in produced
