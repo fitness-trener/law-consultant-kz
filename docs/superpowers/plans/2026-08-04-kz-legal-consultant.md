@@ -673,6 +673,11 @@ def embed(texts: list[str]) -> list[list[float]]:
     return vectors
 
 
+def _normalize_model(name: str) -> str:
+    """Ollama отдаёт модели без явного тега как name:latest."""
+    return name if ":" in name else f"{name}:latest"
+
+
 def health_check() -> None:
     """Проверяет, что Ollama на связи и нужные модели загружены."""
     try:
@@ -685,9 +690,9 @@ def health_check() -> None:
             "Запустите её командой: ollama serve"
         ) from exc
 
-    installed = {m["name"] for m in response.json().get("models", [])}
+    installed = {_normalize_model(m["name"]) for m in response.json().get("models", [])}
     for model in (SETTINGS.gen_model, SETTINGS.embed_model):
-        if model not in installed:
+        if _normalize_model(model) not in installed:
             raise LLMError(f"Модель {model} не установлена. Выполните: ollama pull {model}")
 ```
 
