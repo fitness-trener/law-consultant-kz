@@ -32,12 +32,16 @@ def _client() -> httpx.Client:
     )
 
 
-def _post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _check_provider() -> None:
     if SETTINGS.llm_provider != "ollama":
         raise LLMError(
             f"Провайдер {SETTINGS.llm_provider} ещё не реализован. "
             "Установите LLM_PROVIDER=ollama."
         )
+
+
+def _post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    _check_provider()
     try:
         with _client() as client:
             response = client.post(path, json=payload)
@@ -64,7 +68,19 @@ def _post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _strip_thinking(text: str) -> str:
-    return _THINK_RE.sub("", text).strip()
+    text = _THINK_RE.sub("", text)
+    # Ответ мог оборваться посреди рассуждений (обрезка по num_ctx) —
+    # незакрытый <think> тянется до конца строки, его тоже убираем.
+    open_idx = text.find("<think>")
+    if open_idx != -1:
+        text = text[:open_idx]
+    text = text.strip()
+    if not text:
+        raise LLMError(
+            "Модель не успела дать ответ — весь лимит контекста ушёл на "
+            "рассуждения. Попробуйте задать более короткий вопрос."
+        )
+    return text
 
 
 def complete(messages: list[dict[str, str]], *, temperature: float = 0.2) -> str:
@@ -127,6 +143,7 @@ def _normalize_model(name: str) -> str:
 
 def health_check() -> None:
     """Проверяет, что Ollama на связи и нужные модели загружены."""
+    _check_provider()
     try:
         with _client() as client:
             response = client.get("/api/tags", timeout=10.0)

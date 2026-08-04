@@ -1,3 +1,4 @@
+import dataclasses
 import json
 
 import httpx
@@ -36,6 +37,21 @@ def test_complete_strips_thinking_block(monkeypatch):
     assert llm.complete([{"role": "user", "content": "x"}]) == "Чистый ответ"
 
 
+def test_complete_raises_on_unterminated_thinking_block(monkeypatch):
+    """Ответ обрезан по num_ctx посреди рассуждений — <think> без закрытия
+    не должен уйти пользователю как есть."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"message": {"content": "<think>рассуждаю без закрытия"}},
+        )
+
+    monkeypatch.setattr(llm, "_transport", _mock_transport(handler))
+    with pytest.raises(llm.LLMError):
+        llm.complete([{"role": "user", "content": "x"}])
+
+
 def test_complete_json_parses_object(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -65,6 +81,17 @@ def test_complete_json_raises_after_second_failure(monkeypatch):
 
     monkeypatch.setattr(llm, "_transport", _mock_transport(handler))
     with pytest.raises(llm.LLMError, match="не вернула валидный JSON"):
+        llm.complete_json([{"role": "user", "content": "x"}])
+
+
+def test_complete_json_rejects_non_dict(monkeypatch):
+    """Массив/скаляр — валидный JSON, но не тот объект, что нужен вызывающему."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"message": {"content": "[1, 2, 3]"}})
+
+    monkeypatch.setattr(llm, "_transport", _mock_transport(handler))
+    with pytest.raises(llm.LLMError, match="не вернула валидный JSON-объект"):
         llm.complete_json([{"role": "user", "content": "x"}])
 
 
@@ -135,4 +162,17 @@ def test_health_check_raises_for_missing_model(monkeypatch):
 
     monkeypatch.setattr(llm, "_transport", _mock_transport(handler))
     with pytest.raises(llm.LLMError, match="bge-m3"):
+        llm.health_check()
+
+
+def test_health_check_rejects_unsupported_provider(monkeypatch):
+    """Под LLM_PROVIDER=anthropic health_check не должен долбиться в /api/tags
+    и выдавать невнятную ошибку соединения — сообщение то же, что и в _post()."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("не должно быть сетевого вызова")
+
+    monkeypatch.setattr(llm, "_transport", _mock_transport(handler))
+    monkeypatch.setattr(llm, "SETTINGS", dataclasses.replace(llm.SETTINGS, llm_provider="anthropic"))
+    with pytest.raises(llm.LLMError, match="ещё не реализован"):
         llm.health_check()
