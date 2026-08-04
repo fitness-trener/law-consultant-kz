@@ -44,12 +44,50 @@ def _split_by_points(text: str) -> list[tuple[str | None, str]]:
     return [(None, text)]
 
 
+def _split_oversized_sentence(sentence: str, max_chars: int) -> list[str]:
+    """Бьёт одно предложение, которое само длиннее бюджета, по словам —
+    подпунктовые перечисления внутри одного предложения не редкость в
+    казахстанских НПА. Слово длиннее бюджета (патологический случай —
+    склеенный текст без пробелов) режется по сырым символам.
+    """
+    out: list[str] = []
+    buf = ""
+    for word in sentence.split(" "):
+        if len(word) > max_chars:
+            if buf:
+                out.append(buf)
+                buf = ""
+            for i in range(0, len(word), max_chars):
+                out.append(word[i : i + max_chars])
+            continue
+        if buf and len(buf) + len(word) + 1 > max_chars:
+            out.append(buf)
+            buf = word
+        else:
+            buf = f"{buf} {word}".strip()
+    if buf:
+        out.append(buf)
+    return out
+
+
 def _hard_split(text: str, max_chars: int) -> list[str]:
-    """Последний рубеж: режет по границам предложений в пределах лимита."""
+    """Последний рубеж: режет по границам предложений в пределах лимита.
+
+    Предложение само может превышать бюджет (длинное перечисление внутри
+    одного предложения, абзац вовсе без `.`/`;`) — такое предложение не
+    может быть дописано целиком, иначе max_chars перестаёт быть инвариантом,
+    и доразбивается через `_split_oversized_sentence`.
+    """
     sentences = re.split(r"(?<=[.;])\s+", text)
     out: list[str] = []
     buf = ""
     for sentence in sentences:
+        if len(sentence) > max_chars:
+            if buf:
+                out.append(buf)
+                buf = ""
+            out.extend(_split_oversized_sentence(sentence, max_chars))
+            continue
         if buf and len(buf) + len(sentence) + 1 > max_chars:
             out.append(buf)
             buf = sentence

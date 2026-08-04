@@ -148,3 +148,77 @@ def test_no_text_is_lost_across_chunks():
     corpus = " ".join(c.text for c in chunks)
     for word in " ".join(body.split()).split(" "):
         assert word in corpus
+
+
+def test_hard_split_breaks_oversized_single_sentence():
+    """Критический дефект: перечисление подпунктов внутри одного предложения
+    (запятые, единственная точка в конце) — обычная практика казахстанских
+    НПА. `_hard_split` не проверял длину отдельного предложения и раньше
+    отдавал такое предложение целиком, превышая max_chars в разы.
+    """
+    body = "1. " + ", ".join(f"подпункт номер {i}" for i in range(1, 250)) + "."
+    chunks = chunk_article(_article(body), max_chars=2000, min_chars=100)
+    assert all(len(c.text) <= 2000 for c in chunks)
+    corpus = " ".join(c.text for c in chunks)
+    for word in " ".join(body.split()).split(" "):
+        assert word in corpus
+
+
+def test_hard_split_breaks_paragraph_without_terminal_punctuation():
+    """Критический дефект: абзац вовсе без `.` и `;` — re.split не находит
+    ни одной границы, и весь абзац раньше уходил в один чанк без проверки
+    max_chars.
+    """
+    body = "текст без точек и точек с запятой совсем " * 400
+    chunks = chunk_article(_article(body), max_chars=2000, min_chars=100)
+    assert all(len(c.text) <= 2000 for c in chunks)
+    corpus = " ".join(c.text for c in chunks)
+    for word in " ".join(body.split()).split(" "):
+        assert word in corpus
+
+
+def test_hard_split_breaks_whitespace_free_token_longer_than_budget():
+    """Патологический случай: единственный токен без пробелов длиннее
+    бюджета целиком (например, склеенный текст без пробелов). Делить его
+    негде, кроме как по сырым символам — но и тогда ни один символ не
+    должен потеряться, а каждый фрагмент обязан укладываться в max_chars.
+    """
+    header = "Статья 10. Оплата труда"
+    token = "а" * 5000
+    chunks = chunk_article(_article(token), max_chars=2000, min_chars=100)
+    assert all(len(c.text) <= 2000 for c in chunks)
+    bodies = [c.text[len(header):].lstrip("\n") for c in chunks]
+    assert "".join(bodies) == token
+
+
+def test_general_invariants_across_representative_articles():
+    """Общая гарантия модуля, которую он должен держать для всего остального
+    пайплайна: независимо от формы статьи — каждый чанк укладывается в
+    max_chars, а конкатенация чанков сохраняет каждое слово исходного текста.
+    """
+    max_chars = 2000
+    bodies = {
+        "short": "Короткая норма права применяется в установленном порядке. " * 3,
+        "long_with_points": "\n".join(
+            f"{i}. "
+            + "развёрнутая норма права применяется в установленном порядке. " * 40
+            for i in range(1, 6)
+        ),
+        "long_without_points": (
+            "абзац без нумерации, но с развёрнутым текстом нормы права. " * 100
+        ),
+        "lead_in_before_first_point": (
+            "Трудовой договор должен содержать следующие условия:\n"
+            "1. " + "Пункт первый содержит развёрнутую норму права. " * 40
+            + "\n2. " + "Пункт второй тоже развёрнутый и подробный. " * 40
+        ),
+        "oversized_single_sentence": (
+            "1. " + ", ".join(f"подпункт номер {i}" for i in range(1, 250)) + "."
+        ),
+    }
+    for name, body in bodies.items():
+        chunks = chunk_article(_article(body), max_chars=max_chars, min_chars=100)
+        assert all(len(c.text) <= max_chars for c in chunks), name
+        corpus = " ".join(c.text for c in chunks)
+        for word in " ".join(body.split()).split(" "):
+            assert word in corpus, (name, word)
