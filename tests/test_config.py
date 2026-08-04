@@ -25,6 +25,19 @@ def test_load_settings_reads_env(monkeypatch):
     assert s.relevance_threshold == 0.6
 
 
+def test_load_settings_env_var_overrides_dotenv(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("GEN_MODEL=dotenv-model\n", encoding="utf-8")
+
+    monkeypatch.delenv("GEN_MODEL", raising=False)
+    s = load_settings(env_path=env_file)
+    assert s.gen_model == "dotenv-model"
+
+    monkeypatch.setenv("GEN_MODEL", "real-env-model")
+    s = load_settings(env_path=env_file)
+    assert s.gen_model == "real-env-model"
+
+
 def test_load_settings_rejects_unknown_provider(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     with pytest.raises(ValueError, match="LLM_PROVIDER"):

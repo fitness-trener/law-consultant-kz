@@ -37,22 +37,25 @@ class Source:
     doc_type: str
 
 
-def _load_dotenv() -> None:
-    """Читает .env в os.environ, не затирая уже заданные переменные."""
-    env_file = ROOT / ".env"
+def _load_dotenv(env_path: Path | None = None) -> dict[str, str]:
+    """Парсит .env в словарь, не трогая os.environ."""
+    env_file = env_path or (ROOT / ".env")
     if not env_file.exists():
-        return
+        return {}
+    values: dict[str, str] = {}
     for line in env_file.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
+        values[key.strip()] = value.strip()
+    return values
 
 
-def load_settings() -> Settings:
-    _load_dotenv()
-    provider = os.environ.get("LLM_PROVIDER", "ollama")
+def load_settings(env_path: Path | None = None) -> Settings:
+    # .env — только дефолты; реальные переменные окружения имеют приоритет.
+    env = {**_load_dotenv(env_path), **os.environ}
+    provider = env.get("LLM_PROVIDER", "ollama")
     if provider not in VALID_PROVIDERS:
         raise ValueError(
             f"LLM_PROVIDER={provider!r} не поддерживается. "
@@ -60,17 +63,17 @@ def load_settings() -> Settings:
         )
     return Settings(
         llm_provider=provider,
-        ollama_url=os.environ.get("OLLAMA_URL", "http://localhost:11434"),
-        gen_model=os.environ.get("GEN_MODEL", "qwen3:4b-instruct"),
-        embed_model=os.environ.get("EMBED_MODEL", "bge-m3"),
-        num_ctx=int(os.environ.get("NUM_CTX", "6144")),
-        embed_dim=int(os.environ.get("EMBED_DIM", "1024")),
-        relevance_threshold=float(os.environ.get("RELEVANCE_THRESHOLD", "0.45")),
-        db_path=ROOT / os.environ.get("DB_PATH", "law.db"),
+        ollama_url=env.get("OLLAMA_URL", "http://localhost:11434"),
+        gen_model=env.get("GEN_MODEL", "qwen3:4b-instruct"),
+        embed_model=env.get("EMBED_MODEL", "bge-m3"),
+        num_ctx=int(env.get("NUM_CTX", "6144")),
+        embed_dim=int(env.get("EMBED_DIM", "1024")),
+        relevance_threshold=float(env.get("RELEVANCE_THRESHOLD", "0.45")),
+        db_path=ROOT / env.get("DB_PATH", "law.db"),
         raw_dir=ROOT / "data" / "raw",
         upload_dir=ROOT / "data" / "uploads",
-        max_upload_mb=int(os.environ.get("MAX_UPLOAD_MB", "10")),
-        max_clauses=int(os.environ.get("MAX_CLAUSES", "300")),
+        max_upload_mb=int(env.get("MAX_UPLOAD_MB", "10")),
+        max_clauses=int(env.get("MAX_CLAUSES", "300")),
     )
 
 
