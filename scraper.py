@@ -37,17 +37,25 @@ class ScrapeError(RuntimeError):
     """Страница не соответствует ожидаемой структуре."""
 
 
-def _is_article_heading(tag: Tag) -> str | None:
-    """Возвращает якорь, если тег открывает новую статью."""
+def _heading_match(tag: Tag) -> re.Match[str] | None:
+    """Проверяет, открывает ли <p> новую статью — по жирному тексту «Статья N.».
+
+    Якорь <a name="…"> внутри жирного текста не требуется: если статье
+    предшествует заметка «Примечание ИЗПИ!», adilet вешает якорь на абзац
+    заметки, а не на сам заголовок статьи.
+    """
+    if tag.name != "p":
+        return None
     bold = tag.find("b")
     if bold is None:
         return None
-    anchor = bold.find("a", attrs={"name": True})
-    if anchor is None:
-        return None
-    if not ARTICLE_RE.match(bold.get_text(" ", strip=True)):
-        return None
-    return anchor["name"]
+    return ARTICLE_RE.match(bold.get_text(" ", strip=True))
+
+
+def _own_anchor(tag: Tag) -> str | None:
+    """Якорь <a name="…"> из состава самого тега, если есть."""
+    anchor = tag.find("a", attrs={"name": True})
+    return anchor["name"] if anchor is not None else None
 
 
 def _parse_act_meta(text: str) -> tuple[str | None, str | None]:
@@ -85,14 +93,21 @@ def parse_act(html: str, source: Source) -> Act:
     articles: list[Article] = []
     current: Article | None = None
     buffer: list[str] = []
+    # Самый последний увиденный якорь <a name="…"> — используется, когда
+    # заголовок статьи сам якоря не несёт (см. _heading_match).
+    last_anchor: str | None = None
 
-    for tag in content.find_all(["p", "h3"]):
-        anchor = _is_article_heading(tag) if tag.name == "p" else None
-        if anchor:
+    # <font> нужен только чтобы поймать якорь заметки «Примечание ИЗПИ!»,
+    # которая лежит вне <p> — её текст в буфер статьи не идёт (как и раньше).
+    for tag in content.find_all(["p", "h3", "font"]):
+        own_anchor = _own_anchor(tag)
+        heading = _heading_match(tag)
+
+        if heading:
+            anchor = own_anchor or last_anchor or ""
             if current is not None:
                 current.text = "\n".join(buffer).strip()
                 articles.append(current)
-            heading = ARTICLE_RE.match(tag.get_text(" ", strip=True))
             current = Article(
                 number=heading.group(1),
                 title=heading.group(2).strip(),
@@ -100,10 +115,13 @@ def parse_act(html: str, source: Source) -> Act:
                 text="",
             )
             buffer = []
-        elif current is not None:
+        elif current is not None and tag.name != "font":
             line = tag.get_text(" ", strip=True)
             if line:
                 buffer.append(line)
+
+        if own_anchor:
+            last_anchor = own_anchor
 
     if current is not None:
         current.text = "\n".join(buffer).strip()
@@ -114,6 +132,15 @@ def parse_act(html: str, source: Source) -> Act:
             f"{source.url}: не найдено ни одной статьи. "
             "Вероятно, изменилась вёрстка adilet — проверьте селекторы."
         )
+
+    for art in articles:
+        for line in art.text.split("\n"):
+            if ARTICLE_RE.match(line):
+                raise ScrapeError(
+                    f"{source.url}: в тексте статьи {art.number} обнаружен "
+                    "заголовок другой статьи — парсер пропустил границу между "
+                    "статьями (проверьте вёрстку adilet)"
+                )
 
     full_text = content.get_text(" ", strip=True)
     # Дата и номер акта («Кодекс Республики Казахстан от 23 ноября 2015 года
