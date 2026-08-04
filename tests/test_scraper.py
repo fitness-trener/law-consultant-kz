@@ -9,11 +9,19 @@ from scraper import ScrapeError, act_from_json, act_to_json, parse_act
 FIXTURE = Path(__file__).parent / "fixtures" / "labour_code_sample.html"
 IZPI_FIXTURE = Path(__file__).parent / "fixtures" / "labour_code_izpi_sample.html"
 CHAPTER_FIXTURE = Path(__file__).parent / "fixtures" / "labour_code_chapter_heading_sample.html"
+CIVIL_CODE_H3_FIXTURE = Path(__file__).parent / "fixtures" / "civil_code_h3_articles_sample.html"
 
 SOURCE = Source(
     key="labour_code",
     title="Трудовой кодекс Республики Казахстан",
     url="https://adilet.zan.kz/rus/docs/K1500000414",
+    doc_type="кодекс",
+)
+
+CIVIL_CODE_SOURCE = Source(
+    key="civil_code_general",
+    title="Гражданский кодекс Республики Казахстан (Общая часть)",
+    url="https://adilet.zan.kz/rus/docs/K940001000_",
     doc_type="кодекс",
 )
 
@@ -31,6 +39,11 @@ def izpi_html() -> str:
 @pytest.fixture
 def chapter_heading_html() -> str:
     return CHAPTER_FIXTURE.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def civil_code_h3_html() -> str:
+    return CIVIL_CODE_H3_FIXTURE.read_text(encoding="utf-8")
 
 
 def test_parse_act_reads_title(html):
@@ -210,3 +223,41 @@ def test_parse_act_extracts_date_and_number_from_slogan_block():
     act = parse_act(html, SOURCE)
     assert act.act_date == "2020-01-05"
     assert act.act_number == "1-VI"
+
+
+def test_h3_article_heading_parses_with_correct_number_title_and_anchor(civil_code_h3_html):
+    """Регрессия: старые акты (Гражданский кодекс) оформляют заголовок статьи
+    как <h3 id="…">Статья N. …</h3>, а не <p><b>…</b></p>. Предыдущая
+    реализация пропускала <h3> целиком — все статьи в таком акте
+    схлопывались в одну. Заголовок должен классифицироваться по тексту, а не
+    по тегу (см. scraper._heading_text)."""
+    act = parse_act(civil_code_h3_html, CIVIL_CODE_SOURCE)
+    numbers = [a.number for a in act.articles]
+    assert numbers == [str(n) for n in range(1, 13)], numbers
+
+    article1 = act.articles[0]
+    assert article1.number == "1"
+    assert article1.title == "Отношения, регулируемые гражданским законодательством"
+    assert article1.anchor == "z8250"
+    assert len(article1.text) > 200
+
+    article12 = next(a for a in act.articles if a.number == "12")
+    assert article12.title == "Понятие физического лица"
+    assert article12.anchor == "z28"
+
+
+def test_h3_chapter_heading_starts_no_article_in_civil_code(civil_code_h3_html):
+    """Регрессия: между статьями 11 и 12 в <h3> стоит заголовок «Глава 2.
+    Субъекты гражданских прав» (в той же вёрстке <h3>, что и заголовок
+    статьи). Он не должен становиться отдельной «статьёй» и не должен
+    прилипать к тексту статьи 11."""
+    act = parse_act(civil_code_h3_html, CIVIL_CODE_SOURCE)
+    assert len(act.articles) == 12, "заголовок главы не должен стать 13-й статьёй"
+    assert not any("Глава" in a.title for a in act.articles)
+
+    article11 = next(a for a in act.articles if a.number == "11")
+    assert "Глава 2" not in article11.text
+    assert "Субъекты гражданских прав" not in article11.text
+
+    article12 = next((a for a in act.articles if a.number == "12"), None)
+    assert article12 is not None, "статья 12 должна распарситься отдельной статьёй"

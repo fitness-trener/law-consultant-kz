@@ -7,21 +7,27 @@ from pathlib import Path
 import httpx
 
 URL = "https://adilet.zan.kz/rus/docs/K1500000414"
+CIVIL_CODE_URL = "https://adilet.zan.kz/rus/docs/K940001000_"
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 OUT = FIXTURES_DIR / "labour_code_sample.html"
 IZPI_OUT = FIXTURES_DIR / "labour_code_izpi_sample.html"
 CHAPTER_OUT = FIXTURES_DIR / "labour_code_chapter_heading_sample.html"
+CIVIL_CODE_H3_OUT = FIXTURES_DIR / "civil_code_h3_articles_sample.html"
 
 # якорь сразу перед «Статья N.» — так выглядят нормальные заголовки статей
 HEADING_RE = re.compile(r'<a name="z(\d+)"></a>Статья ')
+# любой <h3>…</h3> целиком — в старых актах (Гражданский кодекс) в этой
+# форме идут и заголовки статей, и заголовки глав/разделов/частей
+# (см. scraper._heading_text)
+H3_TAG_RE = re.compile(r"<h3[^>]*>.*?</h3>", re.S)
 
 
-def _fetch() -> str:
+def _fetch(url: str = URL) -> str:
     # ponytail: httpx's bundled certifi CA set doesn't validate adilet's chain
     # (GoGetSSL intermediate) on this machine, but the OS trust store does —
     # use it instead of disabling verification.
     return httpx.get(
-        URL,
+        url,
         timeout=90,
         follow_redirects=True,
         headers={"User-Agent": "Mozilla/5.0"},
@@ -104,6 +110,53 @@ def make_chapter_heading_fixture(html: str) -> int:
     return 0
 
 
+def make_civil_code_h3_fixture(html: str) -> int:
+    """Фикстура статей 1-12 Гражданского кодекса (Общая часть) — здесь
+    заголовки статей (и глав) оформлены как <h3 id="…">, а не как
+    <p><b>…</b></p> у Трудового кодекса (вёрстка старых актов, см.
+    scraper._heading_text). Между статьями 11 и 12 стоит заголовок «Глава 2.
+    …», который не должен становиться отдельной статьёй и не должен
+    прилипать к тексту статьи 11 (см. scraper._is_chapter_heading)."""
+    h3s = list(H3_TAG_RE.finditer(html))
+
+    def _h3_text(match: re.Match[str]) -> str:
+        return re.sub(r"<[^>]+>", " ", match.group(0))
+
+    article1 = next((i for i, m in enumerate(h3s) if "Статья 1." in _h3_text(m)), None)
+    article13 = next((i for i, m in enumerate(h3s) if "Статья 13." in _h3_text(m)), None)
+    if article1 is None or article13 is None:
+        print("Не найдены заголовки статей 1 и 13 (проверьте вёрстку)", file=sys.stderr)
+        return 1
+
+    # прихватываем структурные заголовки (ОБЩАЯ ЧАСТЬ, Раздел, Глава),
+    # непосредственно предшествующие статье 1, без разрывов между <h3>
+    first = article1
+    while first > 0 and h3s[first - 1].end() == h3s[first].start():
+        first -= 1
+
+    start = h3s[first].start()
+    end = h3s[article13].start()
+    if end <= start:
+        print("Не удалось вырезать фрагмент статей 1-12", file=sys.stderr)
+        return 1
+    body = html[start:end]
+    if "Статья 1." not in body or "Глава 2." not in body or "Статья 12." not in body:
+        print(
+            "В вырезанном фрагменте нет ожидаемых заголовков статьи 1, главы 2 "
+            "и статьи 12 — вёрстка adilet могла измениться",
+            file=sys.stderr,
+        )
+        return 1
+    CIVIL_CODE_H3_OUT.parent.mkdir(parents=True, exist_ok=True)
+    CIVIL_CODE_H3_OUT.write_text(
+        "<html><body><h1>Гражданский кодекс Республики Казахстан (Общая часть)</h1>"
+        f'<div class="text_upd">{body}</div></body></html>',
+        encoding="utf-8",
+    )
+    print(f"Фикстура записана: {CIVIL_CODE_H3_OUT} ({CIVIL_CODE_H3_OUT.stat().st_size} байт)")
+    return 0
+
+
 def main() -> int:
     html = _fetch()
     status = make_basic_fixture(html)
@@ -112,7 +165,11 @@ def main() -> int:
     status = make_izpi_fixture(html)
     if status != 0:
         return status
-    return make_chapter_heading_fixture(html)
+    status = make_chapter_heading_fixture(html)
+    if status != 0:
+        return status
+    civil_html = _fetch(CIVIL_CODE_URL)
+    return make_civil_code_h3_fixture(civil_html)
 
 
 if __name__ == "__main__":

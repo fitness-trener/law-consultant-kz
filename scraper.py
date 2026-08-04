@@ -20,11 +20,19 @@ from models import Act, Article
 
 CONTENT_SELECTOR = "div.text_upd"
 ARTICLE_RE = re.compile(r"^Статья\s+(\d+(?:-\d+)?)\.\s*(.*)$", re.S)
-# Заголовки глав/разделов/частей обычно лежат в <h3>, но иногда adilet
-# помечает их так же, как заголовок статьи — жирным текстом в <p> (см.
-# Finding 1, «Глава 18» Трудового кодекса). Оба варианта не должны попадать
-# в текст статьи.
-CHAPTER_HEADING_RE = re.compile(r"^(Глава|Раздел|РАЗДЕЛ|Часть|ЧАСТЬ)\s+\S")
+# adilet использует минимум две вёрстки для заголовка статьи: новые акты
+# (Трудовой кодекс) — <p><b>Статья N. …</b></p>; старые (Гражданский кодекс) —
+# <h3>Статья N. …</h3>. При этом <h3> у части актов несёт заголовки глав и
+# разделов, а часть актов помечает их так же, как заголовок статьи — жирным
+# текстом в <p> (см. «Глава 18» Трудового кодекса). Поэтому заголовок
+# классифицируется не по тегу, а по тексту: совпадение с ARTICLE_RE — это
+# статья, совпадение с CHAPTER_HEADING_RE — структурный заголовок (не должен
+# попадать в текст статьи и не должен открывать новую статью), всё
+# остальное — тело текущей статьи.
+CHAPTER_HEADING_RE = re.compile(
+    r"^(Глава|Раздел|РАЗДЕЛ|Часть|ЧАСТЬ|Параграф|Подраздел|"
+    r"ОБЩАЯ\s+ЧАСТЬ|ОСОБЕННАЯ\s+ЧАСТЬ)(\s|$)"
+)
 ACT_META_RE = re.compile(
     r"от\s+(\d{1,2})\s+(\w+)\s+(\d{4})\s+года\s+№\s*([\d\-IVX]+)"
 )
@@ -42,37 +50,55 @@ class ScrapeError(RuntimeError):
     """Страница не соответствует ожидаемой структуре."""
 
 
-def _heading_match(tag: Tag) -> re.Match[str] | None:
-    """Проверяет, открывает ли <p> новую статью — по жирному тексту «Статья N.».
+def _heading_text(tag: Tag) -> str | None:
+    """Текст, который может оказаться заголовком статьи/главы/раздела/части —
+    для <p> это только текст внутри <b> (обычный текст в <p> заголовком не
+    считается, иначе неразмеченное «Статья N.» в теле статьи ложно сошло бы
+    за заголовок — см. test_parse_act_raises_when_article_heading_is_swallowed);
+    для <h3> — весь текст элемента, вне зависимости от разметки внутри."""
+    if tag.name == "h3":
+        return tag.get_text(" ", strip=True)
+    if tag.name == "p":
+        bold = tag.find("b")
+        if bold is not None:
+            return bold.get_text(" ", strip=True)
+    return None
 
-    Якорь <a name="…"> внутри жирного текста не требуется: если статье
+
+def _heading_match(tag: Tag) -> re.Match[str] | None:
+    """Проверяет, открывает ли тег новую статью — по тексту «Статья N.»,
+    независимо от того, оформлен он как <p><b>…</b></p> или как <h3>.
+
+    Якорь <a name="…"> / id внутри заголовка не требуется: если статье
     предшествует заметка «Примечание ИЗПИ!», adilet вешает якорь на абзац
     заметки, а не на сам заголовок статьи.
     """
-    if tag.name != "p":
+    text = _heading_text(tag)
+    if text is None:
         return None
-    bold = tag.find("b")
-    if bold is None:
-        return None
-    return ARTICLE_RE.match(bold.get_text(" ", strip=True))
+    return ARTICLE_RE.match(text)
 
 
 def _is_chapter_heading(tag: Tag) -> bool:
-    """<p><b>Глава N. …</b></p> — заголовок главы/раздела/части, помеченный
-    так же, как заголовок статьи (жирным текстом в <p>), а не через <h3>.
-    Такой заголовок не должен попадать в тело статьи (см. Finding 1)."""
-    if tag.name != "p":
+    """Заголовок главы/раздела/части — «Глава N.», «Раздел N.» и т.п. —
+    оформленный так же, как заголовок статьи (см. _heading_text). Такой
+    заголовок не должен попадать в тело статьи и не должен открывать новую
+    статью."""
+    text = _heading_text(tag)
+    if text is None:
         return False
-    bold = tag.find("b")
-    if bold is None:
-        return False
-    return bool(CHAPTER_HEADING_RE.match(bold.get_text(" ", strip=True)))
+    return bool(CHAPTER_HEADING_RE.match(text))
 
 
 def _own_anchor(tag: Tag) -> str | None:
-    """Якорь <a name="…"> из состава самого тега, если есть."""
+    """Якорь тега: <a name="…"> в составе (форма <p><b>…</b></p>) либо id
+    самого элемента (форма <h3 id="…">, см. Гражданский кодекс)."""
     anchor = tag.find("a", attrs={"name": True})
-    return anchor["name"] if anchor is not None else None
+    if anchor is not None:
+        return anchor["name"]
+    if tag.name == "h3":
+        return tag.get("id")
+    return None
 
 
 def _parse_act_meta(text: str) -> tuple[str | None, str | None]:
@@ -114,10 +140,12 @@ def parse_act(html: str, source: Source) -> Act:
     # заголовок статьи сам якоря не несёт (см. _heading_match).
     last_anchor: str | None = None
 
-    # <h3> — заголовки глав/разделов/частей, <font> — только якорь заметки
-    # «Примечание ИЗПИ!». Ни то, ни другое не относится к тексту статьи —
-    # в буфер статьи идут только строки из <p>, и то не из тех <p>, что сами
-    # оказались заголовком главы/раздела/части (см. Finding 1).
+    # <h3> у одних актов несёт заголовок статьи, у других — заголовок главы/
+    # раздела/части (см. _heading_text/_is_chapter_heading — классификация
+    # идёт по тексту, а не по тегу). <font> — только якорь заметки
+    # «Примечание ИЗПИ!», к тексту статьи отношения не имеет. В буфер статьи
+    # идут только строки из <p>, и то не из тех <p>, что сами оказались
+    # заголовком статьи или главы/раздела/части.
     for tag in content.find_all(["p", "h3", "font"]):
         own_anchor = _own_anchor(tag)
         heading = _heading_match(tag)
