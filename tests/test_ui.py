@@ -46,9 +46,27 @@ def test_question_returns_answer_with_source_link(page):
 
 
 def test_document_upload_produces_report(page, tmp_path):
+    # Real-looking contract, comfortably over docparse.MIN_TEXT_LENGTH (200
+    # chars), with clauses that actually violate the Трудовой кодекс so the
+    # analysis produces a finding instead of an empty report.
     document = Document()
-    document.add_paragraph("1.1. Оплата производится в течение 90 банковских дней.")
-    document.add_paragraph("1.2. Работник работает 60 часов в неделю без доплат.")
+    document.add_paragraph("ДОГОВОР ОКАЗАНИЯ УСЛУГ № 14")
+    document.add_paragraph(
+        "Настоящий договор заключён между Заказчиком и Исполнителем "
+        "о нижеследующем."
+    )
+    document.add_paragraph(
+        "1.1. Оплата услуг производится Заказчиком в течение 90 "
+        "банковских дней с момента подписания акта приёма-передачи."
+    )
+    document.add_paragraph(
+        "1.2. Работник обязан работать 60 часов в неделю без доплаты "
+        "за сверхурочную работу и без предоставления выходных дней."
+    )
+    document.add_paragraph(
+        "1.3. Работник отказывается от права на ежегодный оплачиваемый "
+        "трудовой отпуск на весь срок действия настоящего договора."
+    )
     path = tmp_path / "contract.docx"
     document.save(path)
 
@@ -56,8 +74,27 @@ def test_document_upload_produces_report(page, tmp_path):
     page.click("button[data-target=pane-doc]")
     page.set_input_files("input[type=file]", str(path))
     page.click("#upload-form button[type=submit]")
+    # Один вызов модели на пункт (~1 минуту на локальной 4B-модели) — таймаут
+    # намеренно большой, документ намеренно короткий (несколько пунктов).
     expect(page.locator(".report")).to_be_visible(timeout=600_000)
     expect(page.locator(".report")).to_contain_text("Пунктов проверено")
+
+
+def test_document_upload_too_short_shows_scan_message(page, tmp_path):
+    # Under docparse.MIN_TEXT_LENGTH (200 chars) — treated as a scanned
+    # document with no text layer. Real user path: someone uploads a photo
+    # of a contract instead of a text document.
+    document = Document()
+    document.add_paragraph("Слишком короткий документ.")
+    path = tmp_path / "scan.docx"
+    document.save(path)
+
+    page.goto(BASE_URL)
+    page.click("button[data-target=pane-doc]")
+    page.set_input_files("input[type=file]", str(path))
+    page.click("#upload-form button[type=submit]")
+    expect(page.locator(".report")).to_be_visible(timeout=30_000)
+    expect(page.locator(".report")).to_contain_text("скан")
 
 
 def test_disclaimer_present_on_page(page):

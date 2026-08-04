@@ -1,14 +1,16 @@
-{% if error %}
-  <div class="error">{{ error }}</div>
-  <p class="disclaimer">{{ disclaimer }}</p>
-{% elif findings is none %}
-  {# Analysis never finished and produced no error either (e.g. report
-     requested mid-stream). Never show the clean-document message here — that
-     message must only ever mean "we checked and found nothing". #}
-  <div class="error">Анализ ещё не завершён или был прерван без результата.</div>
-  <p class="disclaimer">{{ disclaimer }}</p>
-{% else %}
-  <article class="report">
+{# Same outer .report container regardless of outcome — a test or user
+   script looking at the report area must find it whether the analysis
+   succeeded, errored, or never finished. Only the inner content and the
+   .error styling on the message itself vary. #}
+<article class="report">
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% elif findings is none %}
+    {# Analysis never finished and produced no error either (e.g. report
+       requested mid-stream). Never show the clean-document message here — that
+       message must only ever mean "we checked and found nothing". #}
+    <div class="error">Анализ ещё не завершён или был прерван без результата.</div>
+  {% else %}
     <h2>{{ filename }}</h2>
     <p class="meta">Пунктов проверено: {{ clauses }} · пропущено: {{ skipped }} · находок: {{ findings|length }}</p>
     {% if findings %}
@@ -37,6 +39,6 @@
     {% else %}
       <p class="clean">Анализ не выявил рисков по загруженным НПА. Это не гарантия — корпус ограничен списком документов ниже.</p>
     {% endif %}
-    <p class="disclaimer">{{ disclaimer }}</p>
-  </article>
-{% endif %}
+  {% endif %}
+  <p class="disclaimer">{{ disclaimer }}</p>
+</article>
