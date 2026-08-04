@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/raw/
+data/uploads/
+law.db
+law.db-*
+.pytest_cache/
