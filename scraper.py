@@ -20,6 +20,11 @@ from models import Act, Article
 
 CONTENT_SELECTOR = "div.text_upd"
 ARTICLE_RE = re.compile(r"^Статья\s+(\d+(?:-\d+)?)\.\s*(.*)$", re.S)
+# Заголовки глав/разделов/частей обычно лежат в <h3>, но иногда adilet
+# помечает их так же, как заголовок статьи — жирным текстом в <p> (см.
+# Finding 1, «Глава 18» Трудового кодекса). Оба варианта не должны попадать
+# в текст статьи.
+CHAPTER_HEADING_RE = re.compile(r"^(Глава|Раздел|РАЗДЕЛ|Часть|ЧАСТЬ)\s+\S")
 ACT_META_RE = re.compile(
     r"от\s+(\d{1,2})\s+(\w+)\s+(\d{4})\s+года\s+№\s*([\d\-IVX]+)"
 )
@@ -50,6 +55,18 @@ def _heading_match(tag: Tag) -> re.Match[str] | None:
     if bold is None:
         return None
     return ARTICLE_RE.match(bold.get_text(" ", strip=True))
+
+
+def _is_chapter_heading(tag: Tag) -> bool:
+    """<p><b>Глава N. …</b></p> — заголовок главы/раздела/части, помеченный
+    так же, как заголовок статьи (жирным текстом в <p>), а не через <h3>.
+    Такой заголовок не должен попадать в тело статьи (см. Finding 1)."""
+    if tag.name != "p":
+        return False
+    bold = tag.find("b")
+    if bold is None:
+        return False
+    return bool(CHAPTER_HEADING_RE.match(bold.get_text(" ", strip=True)))
 
 
 def _own_anchor(tag: Tag) -> str | None:
@@ -97,8 +114,10 @@ def parse_act(html: str, source: Source) -> Act:
     # заголовок статьи сам якоря не несёт (см. _heading_match).
     last_anchor: str | None = None
 
-    # <font> нужен только чтобы поймать якорь заметки «Примечание ИЗПИ!»,
-    # которая лежит вне <p> — её текст в буфер статьи не идёт (как и раньше).
+    # <h3> — заголовки глав/разделов/частей, <font> — только якорь заметки
+    # «Примечание ИЗПИ!». Ни то, ни другое не относится к тексту статьи —
+    # в буфер статьи идут только строки из <p>, и то не из тех <p>, что сами
+    # оказались заголовком главы/раздела/части (см. Finding 1).
     for tag in content.find_all(["p", "h3", "font"]):
         own_anchor = _own_anchor(tag)
         heading = _heading_match(tag)
@@ -115,7 +134,7 @@ def parse_act(html: str, source: Source) -> Act:
                 text="",
             )
             buffer = []
-        elif current is not None and tag.name != "font":
+        elif current is not None and tag.name == "p" and not _is_chapter_heading(tag):
             line = tag.get_text(" ", strip=True)
             if line:
                 buffer.append(line)
@@ -145,8 +164,13 @@ def parse_act(html: str, source: Source) -> Act:
     full_text = content.get_text(" ", strip=True)
     # Дата и номер акта («Кодекс Республики Казахстан от 23 ноября 2015 года
     # № 414-V») лежат рядом с <h1>, в div.container_alpha.slogan — вне
-    # div.text_upd, поэтому ищем их по всей странице, а не только в теле.
-    act_date, act_number = _parse_act_meta(soup.get_text(" ", strip=True))
+    # div.text_upd. Ищем сначала там (единственное место, где это точно
+    # реквизиты самого акта, а не случайное совпадение регэкспа где-то ещё
+    # на странице — см. Finding 3), и только если блока нет — по всей
+    # странице.
+    slogan = soup.select_one("div.container_alpha.slogan")
+    meta_text = slogan.get_text(" ", strip=True) if slogan else soup.get_text(" ", strip=True)
+    act_date, act_number = _parse_act_meta(meta_text)
 
     return Act(
         key=source.key,
@@ -161,6 +185,7 @@ def parse_act(html: str, source: Source) -> Act:
 
 
 def fetch_html(url: str) -> str:
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as playwright:
@@ -176,7 +201,15 @@ def fetch_html(url: str) -> str:
             if response is None or response.status != 200:
                 status = "нет ответа" if response is None else response.status
                 raise ScrapeError(f"{url}: сервер вернул {status}")
-            page.wait_for_selector(CONTENT_SELECTOR, timeout=60_000)
+            try:
+                page.wait_for_selector(CONTENT_SELECTOR, timeout=60_000)
+            except PlaywrightTimeoutError as exc:
+                raise ScrapeError(
+                    f"{url}: страница загрузилась (код 200), но ожидаемая "
+                    f"структура документа ({CONTENT_SELECTOR}) не появилась. "
+                    "Возможно, акт признан утратившим силу, произошёл "
+                    "редирект на другую страницу или изменилась вёрстка adilet"
+                ) from exc
             return page.content()
         finally:
             browser.close()

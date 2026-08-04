@@ -10,6 +10,7 @@ URL = "https://adilet.zan.kz/rus/docs/K1500000414"
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 OUT = FIXTURES_DIR / "labour_code_sample.html"
 IZPI_OUT = FIXTURES_DIR / "labour_code_izpi_sample.html"
+CHAPTER_OUT = FIXTURES_DIR / "labour_code_chapter_heading_sample.html"
 
 # якорь сразу перед «Статья N.» — так выглядят нормальные заголовки статей
 HEADING_RE = re.compile(r'<a name="z(\d+)"></a>Статья ')
@@ -71,12 +72,47 @@ def make_izpi_fixture(html: str) -> int:
     return 0
 
 
+def make_chapter_heading_fixture(html: str) -> int:
+    """Фикстура статей 13-15 — между статьёй 14 и статьёй 15 стоит заголовок
+    <h3>Глава 2. ГОСУДАРСТВЕННОЕ РЕГУЛИРОВАНИЕ...</h3>, который должен
+    заканчивать статью 14, а не прилипать к её тексту (см. scraper.parse_act,
+    цикл по content.find_all)."""
+    matches = {m.group(1): m.start() for m in HEADING_RE.finditer(html)}
+    if "13" not in matches or "16" not in matches:
+        print("Не найдены заголовки статей 13 и 16 (проверьте вёрстку)", file=sys.stderr)
+        return 1
+    start = html.rfind("<p", 0, matches["13"])
+    end = html.rfind("<p", 0, matches["16"])
+    if start == -1 or end == -1 or end <= start:
+        print("Не удалось вырезать фрагмент статей 13-15", file=sys.stderr)
+        return 1
+    body = html[start:end]
+    if "Глава 2." not in body or "Статья 14." not in body or "Статья 15." not in body:
+        print(
+            "В вырезанном фрагменте нет ожидаемого заголовка главы между "
+            "статьями 14 и 15 — вёрстка adilet могла измениться",
+            file=sys.stderr,
+        )
+        return 1
+    CHAPTER_OUT.parent.mkdir(parents=True, exist_ok=True)
+    CHAPTER_OUT.write_text(
+        "<html><body><h1>Трудовой кодекс Республики Казахстан</h1>"
+        f'<div class="text_upd">{body}</div></body></html>',
+        encoding="utf-8",
+    )
+    print(f"Фикстура записана: {CHAPTER_OUT} ({CHAPTER_OUT.stat().st_size} байт)")
+    return 0
+
+
 def main() -> int:
     html = _fetch()
     status = make_basic_fixture(html)
     if status != 0:
         return status
-    return make_izpi_fixture(html)
+    status = make_izpi_fixture(html)
+    if status != 0:
+        return status
+    return make_chapter_heading_fixture(html)
 
 
 if __name__ == "__main__":

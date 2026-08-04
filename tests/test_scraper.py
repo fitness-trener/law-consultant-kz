@@ -8,6 +8,7 @@ from scraper import ScrapeError, act_from_json, act_to_json, parse_act
 
 FIXTURE = Path(__file__).parent / "fixtures" / "labour_code_sample.html"
 IZPI_FIXTURE = Path(__file__).parent / "fixtures" / "labour_code_izpi_sample.html"
+CHAPTER_FIXTURE = Path(__file__).parent / "fixtures" / "labour_code_chapter_heading_sample.html"
 
 SOURCE = Source(
     key="labour_code",
@@ -25,6 +26,11 @@ def html() -> str:
 @pytest.fixture
 def izpi_html() -> str:
     return IZPI_FIXTURE.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def chapter_heading_html() -> str:
+    return CHAPTER_FIXTURE.read_text(encoding="utf-8")
 
 
 def test_parse_act_reads_title(html):
@@ -109,3 +115,98 @@ def test_parse_act_raises_when_article_heading_is_swallowed():
     )
     with pytest.raises(ScrapeError, match=re.escape(SOURCE.url)):
         parse_act(html, SOURCE)
+
+
+def test_chapter_heading_does_not_pollute_preceding_article(chapter_heading_html):
+    """Регрессия: между статьёй 14 и статьёй 15 стоит заголовок главы
+    <h3>Глава 2. ГОСУДАРСТВЕННОЕ РЕГУЛИРОВАНИЕ...</h3>. Он не должен
+    прилипать к тексту статьи 14, а статья 15 должна распарситься отдельно
+    со своим номером."""
+    act = parse_act(chapter_heading_html, SOURCE)
+    article14 = next(a for a in act.articles if a.number == "14")
+    assert "Глава 2" not in article14.text
+    article15 = next((a for a in act.articles if a.number == "15"), None)
+    assert article15 is not None, "статья 15 должна распарситься отдельной статьёй"
+
+
+def test_fetch_html_raises_scrape_error_when_content_missing(monkeypatch):
+    """Структурно валидная страница (200, есть <h1>) без div.text_upd —
+    например, акт признан утратившим силу, либо soft-404 — должна давать
+    понятную ScrapeError на русском с URL, а не сырую английскую ошибку
+    Playwright из page.wait_for_selector. Держим офлайн: подменяем
+    playwright.sync_api фейком вместо запуска настоящего браузера."""
+    import sys
+
+    import scraper as scraper_module
+
+    class FakeTimeoutError(Exception):
+        pass
+
+    class FakeResponse:
+        status = 200
+
+    class FakePage:
+        def goto(self, url, wait_until=None, timeout=None):
+            return FakeResponse()
+
+        def wait_for_selector(self, selector, timeout=None):
+            raise FakeTimeoutError(f"Timeout {timeout}ms exceeded waiting for {selector}")
+
+        def content(self):
+            return "<html><body><h1>Тест</h1></body></html>"
+
+    class FakeBrowser:
+        def new_page(self, user_agent=None):
+            return FakePage()
+
+        def close(self):
+            pass
+
+    class FakeChromium:
+        def launch(self, headless=True):
+            return FakeBrowser()
+
+    class FakePlaywrightCtx:
+        chromium = FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    fake_module = type(
+        "playwright_sync_api_stub",
+        (),
+        {
+            "sync_playwright": staticmethod(lambda: FakePlaywrightCtx()),
+            "TimeoutError": FakeTimeoutError,
+        },
+    )
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", fake_module)
+
+    url = "https://adilet.zan.kz/rus"
+    with pytest.raises(ScrapeError, match=re.escape(url)):
+        scraper_module.fetch_html(url)
+
+
+def test_parse_act_extracts_date_and_number_from_slogan_block():
+    """Дата и номер акта должны читаться из div.container_alpha.slogan, а не
+    из первого попавшегося совпадения по всей странице — здесь перед
+    slogan-блоком нарочно стоит совпадающий по формату текст-приманка, чтобы
+    поиск «первое совпадение в документе» дал заведомо неверный результат."""
+    html = (
+        "<html><body>"
+        "<h1>Тестовый кодекс</h1>"
+        "<nav>Раздел «Похожие документы»: см. также акт от 1 марта 1999 года "
+        "№ 999-I, утративший силу.</nav>"
+        '<div class="container_alpha slogan">'
+        "<p>Кодекс Республики Казахстан от 5 января 2020 года № 1-VI.</p>"
+        "</div>"
+        '<div class="text_upd">'
+        '<p><b><a name="z1"></a>Статья 1. Тест</b></p><p>текст</p>'
+        "</div></body></html>"
+    )
+    act = parse_act(html, SOURCE)
+    assert act.act_date == "2020-01-05"
+    assert act.act_number == "1-VI"
