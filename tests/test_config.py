@@ -5,10 +5,10 @@ import pytest
 from config import Source, load_settings, load_sources
 
 
-def test_load_settings_uses_defaults(monkeypatch):
+def test_load_settings_uses_defaults(tmp_path, monkeypatch):
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.delenv("GEN_MODEL", raising=False)
-    s = load_settings()
+    s = load_settings(env_path=tmp_path / "nonexistent.env")
     assert s.llm_provider == "ollama"
     assert s.gen_model == "qwen3:4b-instruct"
     assert s.embed_model == "bge-m3"
