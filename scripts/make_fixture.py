@@ -8,11 +8,13 @@ import httpx
 
 URL = "https://adilet.zan.kz/rus/docs/K1500000414"
 CIVIL_CODE_URL = "https://adilet.zan.kz/rus/docs/K940001000_"
+REPEALED_TAX_CODE_URL = "https://adilet.zan.kz/rus/docs/K1700000120"
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 OUT = FIXTURES_DIR / "labour_code_sample.html"
 IZPI_OUT = FIXTURES_DIR / "labour_code_izpi_sample.html"
 CHAPTER_OUT = FIXTURES_DIR / "labour_code_chapter_heading_sample.html"
 CIVIL_CODE_H3_OUT = FIXTURES_DIR / "civil_code_h3_articles_sample.html"
+REPEALED_TAX_CODE_OUT = FIXTURES_DIR / "tax_code_2017_repealed_sample.html"
 
 # якорь сразу перед «Статья N.» — так выглядят нормальные заголовки статей
 HEADING_RE = re.compile(r'<a name="z(\d+)"></a>Статья ')
@@ -157,6 +159,44 @@ def make_civil_code_h3_fixture(html: str) -> int:
     return 0
 
 
+def make_repealed_tax_code_fixture(html: str) -> int:
+    """Фикстура Налогового кодекса 2017 года (K1700000120) — утратил силу с
+    01.01.2026, заменён кодексом № 214-VIII. Нужна для проверки Finding 3:
+    adilet не отмечает утративший силу акт ничем особым в <h1> или
+    div.container_alpha.slogan (структура там идентична действующим актам —
+    проверено вручную), маркер — это сноска «Утратил силу …» в самом начале
+    div.text_upd, ДО заголовка статьи 1 (у действующих актов в этом месте
+    только «Примечание РЦПИ!»/«Вводится в действие», см. parse_act)."""
+    marks = [m.start() for m in HEADING_RE.finditer(html)]
+    if not marks:
+        print("Не найден заголовок статьи 1 (проверьте вёрстку)", file=sys.stderr)
+        return 1
+    body_start = html.find("<body")
+    if body_start == -1:
+        print("Не найден <body> (проверьте вёрстку)", file=sys.stderr)
+        return 1
+    # с запасом внутрь статьи 1 — сама статья 1 не обязана распарситься
+    # целиком, проверка утраты силы срабатывает раньше
+    body = html[body_start : marks[0] + 2500]
+    if "Утратил силу" not in body:
+        print(
+            "В вырезанном фрагменте нет ожидаемой сноски «Утратил силу» — "
+            "либо вёрстка adilet изменилась, либо акт больше не отмечен так",
+            file=sys.stderr,
+        )
+        return 1
+    REPEALED_TAX_CODE_OUT.parent.mkdir(parents=True, exist_ok=True)
+    REPEALED_TAX_CODE_OUT.write_text(
+        body + "</p></article></div></div></div></body></html>",
+        encoding="utf-8",
+    )
+    print(
+        f"Фикстура записана: {REPEALED_TAX_CODE_OUT} "
+        f"({REPEALED_TAX_CODE_OUT.stat().st_size} байт)"
+    )
+    return 0
+
+
 def main() -> int:
     html = _fetch()
     status = make_basic_fixture(html)
@@ -169,7 +209,11 @@ def main() -> int:
     if status != 0:
         return status
     civil_html = _fetch(CIVIL_CODE_URL)
-    return make_civil_code_h3_fixture(civil_html)
+    status = make_civil_code_h3_fixture(civil_html)
+    if status != 0:
+        return status
+    repealed_html = _fetch(REPEALED_TAX_CODE_URL)
+    return make_repealed_tax_code_fixture(repealed_html)
 
 
 if __name__ == "__main__":

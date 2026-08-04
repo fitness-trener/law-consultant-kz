@@ -35,6 +35,23 @@ def cmd_scrape(keys: list[str] | None) -> int:
     return 0
 
 
+def _prune_removed_sources(conn, sources: list) -> list[str]:
+    """Удаляет из базы НПА, чьего adilet_url больше нет в sources.yaml —
+    например, после исправления неверного URL (см. Finding 2). Без этого
+    старый акт (в т.ч. утративший силу) остаётся в базе бессрочно рядом с
+    новым. Каскад (ON DELETE CASCADE + триггеры) сам чистит chunks,
+    vec_chunks и chunks_fts."""
+    valid_urls = {s.url for s in sources}
+    removed = []
+    for act_id, title, url in conn.execute("SELECT id, title, adilet_url FROM acts").fetchall():
+        if url not in valid_urls:
+            conn.execute("DELETE FROM acts WHERE id = ?", (act_id,))
+            removed.append(title)
+    if removed:
+        conn.commit()
+    return removed
+
+
 def cmd_index() -> int:
     llm.health_check()
     conn = db.connect()
@@ -47,6 +64,9 @@ def cmd_index() -> int:
         return 1
     for key, count in indexer.index_directory(conn, SETTINGS.raw_dir).items():
         print(f"{key}: {count} чанков")
+    removed = _prune_removed_sources(conn, load_sources())
+    if removed:
+        print(f"Удалены НПА, отсутствующие в sources.yaml: {', '.join(removed)}")
     return 0
 
 

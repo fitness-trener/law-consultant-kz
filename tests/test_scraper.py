@@ -10,6 +10,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "labour_code_sample.html"
 IZPI_FIXTURE = Path(__file__).parent / "fixtures" / "labour_code_izpi_sample.html"
 CHAPTER_FIXTURE = Path(__file__).parent / "fixtures" / "labour_code_chapter_heading_sample.html"
 CIVIL_CODE_H3_FIXTURE = Path(__file__).parent / "fixtures" / "civil_code_h3_articles_sample.html"
+REPEALED_TAX_CODE_FIXTURE = Path(__file__).parent / "fixtures" / "tax_code_2017_repealed_sample.html"
 
 SOURCE = Source(
     key="labour_code",
@@ -44,6 +45,11 @@ def chapter_heading_html() -> str:
 @pytest.fixture
 def civil_code_h3_html() -> str:
     return CIVIL_CODE_H3_FIXTURE.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def repealed_tax_code_html() -> str:
+    return REPEALED_TAX_CODE_FIXTURE.read_text(encoding="utf-8")
 
 
 def test_parse_act_reads_title(html):
@@ -261,3 +267,66 @@ def test_h3_chapter_heading_starts_no_article_in_civil_code(civil_code_h3_html):
 
     article12 = next((a for a in act.articles if a.number == "12"), None)
     assert article12 is not None, "статья 12 должна распарситься отдельной статьёй"
+
+
+def test_article_without_own_anchor_does_not_inherit_previous_articles_anchor():
+    """Регрессия (Finding 1), минимальный случай без заметки ИЗПИ: last_anchor
+    не сбрасывался после того, как его забрала статья без собственного
+    якоря — следующая такая же статья молча наследовала якорь чужой,
+    предыдущей статьи. В реальном корпусе так, например, якорь z22 достался
+    статьям 6, 7 и 8 КоАП РК (data/raw/admin_offences_code.json), и ссылка
+    на статью 8 вела на статью 6."""
+    html = (
+        '<html><body><h1>Тест</h1><div class="text_upd">'
+        '<p><b><a name="z1"></a>Статья 1. Первая</b></p><p>текст первой</p>'
+        "<p><b>Статья 2. Вторая (без своего якоря)</b></p><p>текст второй</p>"
+        "<p><b>Статья 3. Третья (тоже без своего якоря)</b></p><p>текст третьей</p>"
+        "</div></body></html>"
+    )
+    act = parse_act(html, SOURCE)
+    anchors = [a.anchor for a in act.articles]
+    assert anchors == ["z1", "", ""], (
+        f"статьи 2 и 3 не должны наследовать якорь статьи 1: {anchors}"
+    )
+
+
+def test_article_anchors_are_distinct_in_izpi_fixture(izpi_html):
+    """Регрессия (Finding 1): last_anchor — запасной якорь для статьи, перед
+    которой стоит заметка «Примечание ИЗПИ!» без собственного якоря на
+    заголовке, — раньше не сбрасывался после того, как его забрала статья.
+    Следующая статья без собственного якоря молча наследовала якорь чужой,
+    предыдущей статьи (в реальном корпусе так 92 статьи КоАП делили якорь
+    с соседями, и ссылка на статью вела не туда)."""
+    act = parse_act(izpi_html, SOURCE)
+    anchors = [a.anchor for a in act.articles if a.anchor]
+    assert len(anchors) == len(set(anchors)), (
+        f"якоря статей не уникальны: {anchors}"
+    )
+
+
+def test_article_anchors_are_distinct_in_civil_code_h3_fixture(civil_code_h3_html):
+    """Та же регрессия (Finding 1), для вёрстки <h3> Гражданского кодекса."""
+    act = parse_act(civil_code_h3_html, CIVIL_CODE_SOURCE)
+    anchors = [a.anchor for a in act.articles if a.anchor]
+    assert len(anchors) == len(set(anchors)), (
+        f"якоря статей не уникальны: {anchors}"
+    )
+
+
+def test_parse_act_raises_for_repealed_act(repealed_tax_code_html):
+    """Finding 3: Налоговый кодекс 2017 года (K1700000120) утратил силу с
+    01.01.2026 — его нельзя индексировать и цитировать как действующее
+    право. adilet не помечает это никак особо в <h1> или в
+    div.container_alpha.slogan (структура там как у действующего акта) —
+    настоящий маркер это сноска «Утратил силу …», которая стоит перед
+    заголовком статьи 1 (см. scraper.REPEALED_RE)."""
+    with pytest.raises(ScrapeError, match="утратившим силу"):
+        parse_act(repealed_tax_code_html, SOURCE)
+
+
+def test_parse_act_does_not_raise_for_act_in_force(html, civil_code_h3_html):
+    """Обратная сторона Finding 3: постатейные сноски «признаётся утратившим
+    силу» о конкретных статьях (нормальная часть действующих кодексов) не
+    должны ложно принимать действующий акт за утративший силу целиком."""
+    parse_act(html, SOURCE)
+    parse_act(civil_code_h3_html, CIVIL_CODE_SOURCE)

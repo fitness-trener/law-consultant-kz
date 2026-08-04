@@ -37,6 +37,15 @@ ACT_META_RE = re.compile(
     r"от\s+(\d{1,2})\s+(\w+)\s+(\d{4})\s+года\s+№\s*([\d\-IVX]+)"
 )
 AMENDMENT_DATE_RE = re.compile(r"от\s+(\d{2})\.(\d{2})\.(\d{4})")
+# Маркер утраты силы актом целиком. adilet не помечает это в <h1> или
+# div.container_alpha.slogan — там утративший силу акт неотличим от
+# действующего (проверено на живой странице K1700000120, см.
+# scripts/make_fixture.py:make_repealed_tax_code_fixture). Настоящий маркер —
+# сноска «Утратил силу …» в самом начале div.text_upd, ДО заголовка статьи 1
+# (см. _extract_preamble). Проверять по всему тексту документа нельзя: там
+# полно постатейных сносок «признаётся утратившим силу» о конкретных
+# статьях — это нормально для действующих актов.
+REPEALED_RE = re.compile(r"утрати[а-я]*\s+сил[а-я]*", re.IGNORECASE)
 REQUEST_DELAY_SECONDS = 2.0
 
 MONTHS = {
@@ -139,6 +148,9 @@ def parse_act(html: str, source: Source) -> Act:
     # Самый последний увиденный якорь <a name="…"> — используется, когда
     # заголовок статьи сам якоря не несёт (см. _heading_match).
     last_anchor: str | None = None
+    # Текст до заголовка статьи 1 — сюда попадает сноска «Утратил силу…»,
+    # если акт утратил силу целиком (см. REPEALED_RE ниже / Finding 3).
+    preamble: list[str] = []
 
     # <h3> у одних актов несёт заголовок статьи, у других — заголовок главы/
     # раздела/части (см. _heading_text/_is_chapter_heading — классификация
@@ -152,6 +164,12 @@ def parse_act(html: str, source: Source) -> Act:
 
         if heading:
             anchor = own_anchor or last_anchor or ""
+            # Якорь потреблён: он относится только к статье, которая его
+            # только что забрала (свой либо унаследованный от заметки ИЗПИ).
+            # Не сбросить здесь — значит следующая статья без своего якоря
+            # молча унаследует чужой (Finding 1: 92 статьи КоАП делили якорь
+            # с соседями, ссылки вели не туда).
+            last_anchor = None
             if current is not None:
                 current.text = "\n".join(buffer).strip()
                 articles.append(current)
@@ -162,17 +180,42 @@ def parse_act(html: str, source: Source) -> Act:
                 text="",
             )
             buffer = []
-        elif current is not None and tag.name == "p" and not _is_chapter_heading(tag):
+        elif current is None:
+            preamble.append(tag.get_text(" ", strip=True))
+        elif tag.name == "p" and not _is_chapter_heading(tag):
             line = tag.get_text(" ", strip=True)
             if line:
                 buffer.append(line)
 
-        if own_anchor:
+        # Не взводить last_anchor из якоря самой статьи — он уже потреблён
+        # этой статьёй выше и не должен остаться «на подхвате» для
+        # следующей. last_anchor нужен только для якорей, повисших на
+        # заметках вне заголовка (см. docstring _heading_match).
+        if own_anchor and not heading:
             last_anchor = own_anchor
 
     if current is not None:
         current.text = "\n".join(buffer).strip()
         articles.append(current)
+
+    # Акт, утративший силу целиком, не должен попасть в корпус как
+    # действующий (Finding 3). adilet не помечает это никак особо в <h1> или
+    # в div.container_alpha.slogan — оба неотличимы от действующего акта
+    # (проверено на живой странице K1700000120 — Налоговый кодекс 2017 года).
+    # Настоящий маркер — сноска «Утратил силу …» перед заголовком статьи 1
+    # (preamble, собранный выше). Проверять по всему тексту документа нельзя:
+    # он насыщен постатейными сносками «признаётся утратившим силу» о
+    # конкретных статьях — это нормально для действующих актов.
+    slogan = soup.select_one("div.container_alpha.slogan")
+    repeal_scope = " ".join([
+        h1.get_text(" ", strip=True),
+        slogan.get_text(" ", strip=True) if slogan else "",
+        " ".join(preamble),
+    ])
+    if REPEALED_RE.search(repeal_scope):
+        raise ScrapeError(
+            f"{source.url}: акт признан утратившим силу и не действует"
+        )
 
     if not articles:
         raise ScrapeError(
@@ -191,12 +234,11 @@ def parse_act(html: str, source: Source) -> Act:
 
     full_text = content.get_text(" ", strip=True)
     # Дата и номер акта («Кодекс Республики Казахстан от 23 ноября 2015 года
-    # № 414-V») лежат рядом с <h1>, в div.container_alpha.slogan — вне
-    # div.text_upd. Ищем сначала там (единственное место, где это точно
-    # реквизиты самого акта, а не случайное совпадение регэкспа где-то ещё
-    # на странице — см. Finding 3), и только если блока нет — по всей
-    # странице.
-    slogan = soup.select_one("div.container_alpha.slogan")
+    # № 414-V») лежат рядом с <h1>, в div.container_alpha.slogan (уже найден
+    # выше, для проверки утраты силы) — вне div.text_upd. Ищем сначала там
+    # (единственное место, где это точно реквизиты самого акта, а не
+    # случайное совпадение регэкспа где-то ещё на странице), и только если
+    # блока нет — по всей странице.
     meta_text = slogan.get_text(" ", strip=True) if slogan else soup.get_text(" ", strip=True)
     act_date, act_number = _parse_act_meta(meta_text)
 
