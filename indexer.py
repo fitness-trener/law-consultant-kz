@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -81,8 +82,22 @@ def index_act(
 def index_directory(
     conn: sqlite3.Connection, raw_dir: Path, embed_fn: EmbedFn = llm.embed
 ) -> dict[str, int]:
+    """Индексирует все акты каталога. Один битый файл (плохой JSON, обрыв
+    эмбеддинга) не должен ронять весь корпус — акты дальше по сортировке от
+    него не зависят, поэтому продолжаем и репортим сбой, как cmd_scrape."""
     result: dict[str, int] = {}
+    failed: list[str] = []
     for path in sorted(raw_dir.glob("*.json")):
-        act = act_from_json(path.read_text(encoding="utf-8"))
-        result[act.key] = index_act(conn, act, embed_fn=embed_fn)
+        try:
+            act = act_from_json(path.read_text(encoding="utf-8"))
+            result[act.key] = index_act(conn, act, embed_fn=embed_fn)
+        except Exception as exc:  # noqa: BLE001 — сообщаем и продолжаем корпус
+            # Незакоммиченные вставки битого акта (index_act мог упасть уже
+            # после INSERT, до commit) иначе прицепятся к транзакции
+            # следующего, успешного акта и попадут в базу как сирота.
+            conn.rollback()
+            print(f"ОШИБКА индексации {path.name}: {exc}", file=sys.stderr)
+            failed.append(path.name)
+    if failed:
+        print(f"Не удалось проиндексировать: {', '.join(failed)}", file=sys.stderr)
     return result

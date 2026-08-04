@@ -95,3 +95,53 @@ def test_index_directory_processes_all_files(tmp_path):
     conn = _conn(tmp_path)
     result = indexer.index_directory(conn, raw, embed_fn=_fake_embed)
     assert result == {"a": 2, "b": 3}
+
+
+def test_index_directory_continues_after_one_bad_act(tmp_path, capsys):
+    """Один битый JSON не должен ронять весь корпус: акты дальше по
+    сортировке от него не зависят и должны быть проиндексированы."""
+    from scraper import act_to_json
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "a.json").write_text(act_to_json(_act("a", 2)), encoding="utf-8")
+    (raw / "b_bad.json").write_text("{не json", encoding="utf-8")
+    (raw / "c.json").write_text(act_to_json(_act("c", 3)), encoding="utf-8")
+    conn = _conn(tmp_path)
+
+    result = indexer.index_directory(conn, raw, embed_fn=_fake_embed)
+
+    assert result == {"a": 2, "c": 3}
+    assert conn.execute("SELECT COUNT(*) FROM acts").fetchone()[0] == 2
+    assert "b_bad" in capsys.readouterr().err
+
+
+def test_index_directory_embed_failure_leaves_no_orphan_rows(tmp_path):
+    """Сбой эмбеддинга на одном акте не должен оставлять в базе акт без
+    чанков/векторов — незакоммиченная вставка должна откатиться."""
+    from scraper import act_to_json
+
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "a.json").write_text(act_to_json(_act("a", 2)), encoding="utf-8")
+    (raw / "b_boom.json").write_text(act_to_json(_act("b_boom", 2)), encoding="utf-8")
+    (raw / "c.json").write_text(act_to_json(_act("c", 3)), encoding="utf-8")
+    conn = _conn(tmp_path)
+
+    calls = {"n": 0}
+
+    def embed_that_fails_on_second_act(texts):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("модель недоступна")
+        return _fake_embed(texts)
+
+    result = indexer.index_directory(conn, raw, embed_fn=embed_that_fails_on_second_act)
+
+    assert result == {"a": 2, "c": 3}
+    acts = conn.execute("SELECT COUNT(*) FROM acts").fetchone()[0]
+    chunks = conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    vecs = conn.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0]
+    assert acts == 2
+    assert chunks == 5
+    assert vecs == 5

@@ -150,3 +150,123 @@ def test_dedup_keeps_one_chunk_per_article(tmp_path):
     article_numbers = [h.article_no for h in hits]
     assert len(article_numbers) == len(set(article_numbers))
     assert len(hits) == 4
+
+
+def test_ubiquitous_domain_word_does_not_bypass_relevance_floor(tmp_path):
+    """FTS-совпадение по слову, которое встречается почти в каждом чанке
+    корпуса ("статья" — часть заголовка любой статьи), не должно спасать
+    запрос от отказа. Оно не стоп-слово языка, но стало стоп-словом именно
+    для этого корпуса — прежний код спасал любой запрос с таким словом."""
+    hits = retriever.search(
+        _conn(tmp_path),
+        "рецепт борща статья",
+        k=4,
+        embed_fn=lambda texts: [[0.0] * 1024 for _ in texts],
+    )
+    assert hits == []
+
+
+def test_rare_term_still_rescued_by_fts_when_vector_is_weak(tmp_path):
+    """В отличие от вездесущего слова, термин, редкий для корпуса (доля
+    чанков с ним ниже DISCRIMINATIVE_DF_FRACTION), — реальный сигнал
+    релевантности и должен пробивать порог даже при слабом векторе."""
+    filler = [
+        Article(
+            number=str(i),
+            title=f"Статья {i}",
+            anchor=f"z{i}",
+            text=f"Общая норма трудового законодательства номер {i}. " * 3,
+        )
+        for i in range(1, 12)
+    ]
+    target = Article(
+        number="152",
+        title="Статья 152",
+        anchor="z152",
+        text="Работник обязан возместить работодателю причинённый прямой "
+             "действительный ущерб. " * 3,
+    )
+    act = Act(
+        key="labour_code_rare_term",
+        title="Трудовой кодекс Республики Казахстан",
+        url="https://adilet.zan.kz/rus/docs/K1500000414",
+        doc_type="кодекс",
+        revision_date="2026-06-11",
+        articles=filler + [target],
+    )
+
+    # Каждый чанк получает свою координату при индексации (счётчик идёт по
+    # порядку статей), а запрос — заведомо другую: косинусная близость к
+    # любому чанку равна 0, спасти запрос может только FTS.
+    counter = iter(range(12))
+
+    def index_embed(texts):
+        vectors = []
+        for _ in texts:
+            slot = next(counter)
+            vectors.append([1.0 if i == slot else 0.0 for i in range(1024)])
+        return vectors
+
+    def query_embed(texts):
+        return [[1.0 if i == 500 else 0.0 for i in range(1024)] for _ in texts]
+
+    conn = db.connect(tmp_path / "rare.db")
+    db.create_schema(conn)
+    indexer.index_act(conn, act, embed_fn=index_embed)
+
+    hits = retriever.search(conn, "возместить", k=4, embed_fn=query_embed)
+    assert "152" in {h.article_no for h in hits}
+
+
+def test_blank_query_returns_empty_without_touching_model(tmp_path):
+    """Пустой или из одних пробелов запрос — вырожденный ввод, а не низкая
+    релевантность. Отказ должен быть мгновенным, без обращения к модели."""
+
+    def _boom(texts):
+        raise AssertionError("embed_fn не должен вызываться для пустого запроса")
+
+    conn = _conn(tmp_path)
+    assert retriever.search(conn, "", embed_fn=_boom) == []
+    assert retriever.search(conn, "   ", embed_fn=_boom) == []
+
+
+def _many_chunk_article() -> Act:
+    """Статья 16 ТК РК даёт 37 чанков на реальном корпусе — здесь имитируем
+    статью с числом чанков, заведомо превышающим прежний CANDIDATES=20."""
+    points = "\n".join(
+        f"{i}. Работник несёт материальную ответственность за причинённый "
+        f"работодателю прямой действительный ущерб номер {i}. "
+        for i in range(1, 26)
+    )
+    texts = {
+        "16": points,
+        "10": "Трудовой договор заключается в письменной форме не менее чем в двух "
+              "экземплярах и подписывается сторонами ущерб. " * 3,
+        "11": "Ежегодный оплачиваемый трудовой отпуск работникам предоставляется "
+              "продолжительностью двадцать четыре календарных дня ущерб. " * 3,
+        "12": "Работник обязан возместить работодателю понесённые расходы ущерб. " * 3,
+    }
+    return Act(
+        key="labour_code_many_chunks",
+        title="Трудовой кодекс Республики Казахстан",
+        url="https://adilet.zan.kz/rus/docs/K1500000414",
+        doc_type="кодекс",
+        revision_date="2026-06-11",
+        articles=[
+            Article(number=n, title=f"Статья {n}", anchor=f"z{n}", text=t)
+            for n, t in texts.items()
+        ],
+    )
+
+
+def test_large_article_does_not_starve_dedup(tmp_path):
+    """Один длинный акт с 25+ чанками не должен вытеснять из пула кандидатов
+    все остальные статьи ещё до дедупликации — иначе k=4 отдаёт 1 статью."""
+    conn = db.connect(tmp_path / "many.db")
+    db.create_schema(conn)
+    indexer.index_act(conn, _many_chunk_article(), embed_fn=_embed)
+
+    hits = retriever.search(conn, "ущерб", k=4, embed_fn=_embed)
+
+    article_numbers = {h.article_no for h in hits}
+    assert len(article_numbers) == 4

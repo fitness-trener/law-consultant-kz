@@ -16,7 +16,24 @@ from db import serialize_vector
 
 SETTINGS = load_settings()
 RRF_K = 60
-CANDIDATES = 20
+# Кандидатов должно быть заведомо больше, чем чанков в самой длинной статье в
+# корпусе, иначе она одна съедает весь пул до дедупликации по статье (статья 16
+# ТК РК — 37 чанков). Потолок, который это подразумевает: акт со статьёй из
+# 150+ чанков снова столкнётся с этой проблемой.
+CANDIDATES = 150
+# Доля индексированных чанков, при превышении которой термин запроса считается
+# неинформативным для корпуса (не стоп-слово языка, а слово, ставшее вездесущим
+# именно в этом корпусе — "статья", "работник", "республики"). FTS может обойти
+# порог векторной релевантности, только если хотя бы один термин запроса
+# встречается реже этой доли.
+DISCRIMINATIVE_DF_FRACTION = 0.10
+# Нижняя граница: без стемминга FTS5 считает "кодекс" и "кодекса" разными
+# токенами, поэтому редкое юридическое клише вроде "настоящего Кодекса"
+# (упоминается лишь в единичных статьях как ссылка на сам акт, а не как
+# признак темы запроса) статистически неотличимо от по-настоящему
+# специфичного термина. Термин должен встречаться не реже этой доли, иначе
+# он слишком разрежен, чтобы быть надёжным сигналом, а не случайным совпадением.
+MIN_DISCRIMINATIVE_DF_FRACTION = 0.01
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
 # Русские стоп-слова: не должны в одиночку "спасать" запрос от отказа —
@@ -26,6 +43,7 @@ STOPWORDS: frozenset[str] = frozenset(
     {
         "как", "что", "чего", "чему", "чем", "где", "когда", "куда", "зачем", "почему",
         "кто", "кого", "кому", "это", "этот", "эта", "эти", "тот", "той",
+        "какой", "какая", "какое", "какие", "какого", "какому", "каким", "какими", "каком",
         "для", "при", "над", "под", "про", "без", "через", "между",
         "если", "чтобы", "или", "либо", "ибо", "так", "там", "тут",
         "уже", "ещё", "еще",
@@ -62,12 +80,34 @@ class Hit:
         return f"{self.url}#{self.anchor}" if self.anchor else self.url
 
 
-def _fts_query(text: str) -> str:
-    """Превращает свободный ввод в безопасный запрос FTS5."""
+def _fts_terms(text: str) -> list[str]:
+    """Слова запроса, годные для FTS: не мусор, не стоп-слово языка."""
     words = _WORD_RE.findall(text.lower())
-    return " OR ".join(
-        f'"{w}"' for w in words if len(w) > 2 and w not in STOPWORDS
-    )
+    return [w for w in words if len(w) > 2 and w not in STOPWORDS]
+
+
+def _fts_query(terms: list[str]) -> str:
+    """Превращает список слов в безопасный запрос FTS5 (экранирует ввод)."""
+    return " OR ".join(f'"{w}"' for w in terms)
+
+
+def _is_discriminative(conn: sqlite3.Connection, terms: list[str]) -> bool:
+    """FTS может перебить порог векторной релевантности, только если хотя бы
+    один термин запроса информативен для корпуса, а не встречается почти
+    везде (как "статья" или "кодекс" — они не стоп-слова языка, но стали
+    стоп-словами для этого корпуса)."""
+    total = conn.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0]
+    if not total:
+        return False
+    for term in terms:
+        df = conn.execute(
+            "SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH ?", (f'"{term}"',)
+        ).fetchone()[0]
+        # df == 0 — термин ничего не нашёл, это не сигнал, а его отсутствие.
+        # Слишком низкий df — тоже не сигнал, а шум единичного совпадения.
+        if total * MIN_DISCRIMINATIVE_DF_FRACTION < df < total * DISCRIMINATIVE_DF_FRACTION:
+            return True
+    return False
 
 
 def _vector_candidates(
@@ -86,8 +126,8 @@ def _vector_candidates(
     return [row[0] for row in rows], best_similarity
 
 
-def _fts_candidates(conn: sqlite3.Connection, query: str) -> list[int]:
-    match = _fts_query(query)
+def _fts_candidates(conn: sqlite3.Connection, terms: list[str]) -> list[int]:
+    match = _fts_query(terms)
     if not match:
         return []
     rows = conn.execute(
@@ -112,11 +152,16 @@ def search(
     k: int = 4,
     embed_fn: EmbedFn = llm.embed,
 ) -> list[Hit]:
-    vector_ids, best_similarity = _vector_candidates(conn, query, embed_fn)
-    fts_ids = _fts_candidates(conn, query)
-
-    if best_similarity < SETTINGS.relevance_threshold and not fts_ids:
+    if not query or not query.strip():
         return []
+
+    vector_ids, best_similarity = _vector_candidates(conn, query, embed_fn)
+    terms = _fts_terms(query)
+    fts_ids = _fts_candidates(conn, terms)
+
+    if best_similarity < SETTINGS.relevance_threshold:
+        if not fts_ids or not _is_discriminative(conn, terms):
+            return []
     if not vector_ids and not fts_ids:
         return []
 
