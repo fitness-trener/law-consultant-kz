@@ -1,6 +1,7 @@
 """Анализ пунктов документа на правовые риски."""
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass
 from typing import Callable
@@ -18,6 +19,8 @@ _RISK_ALIASES = {
     "high": "high", "высокий": "high", "критический": "medium",
 }
 CLASSIFICATION_SAMPLE_CHARS = 1500
+# Номер статьи может нести суффикс, как в "152-1".
+_ARTICLE_NO_RE = re.compile(r"статья\s+(\d+(?:-\d+)?)", re.IGNORECASE)
 
 
 @dataclass
@@ -33,7 +36,18 @@ class Finding:
 
 def _normalize_risk(value: object) -> str:
     """Неизвестное значение — не повод терять находку, но и не повод паниковать."""
+    if value is None:
+        # Модель не вернула вердикт вообще — намеренно считаем это отсутствием
+        # риска, а не поводом эскалировать: придуманный риск хуже упущенного,
+        # значит непонятное отсутствие ответа тоже должно склоняться к "нет риска".
+        return "none"
     return _RISK_ALIASES.get(str(value).strip().lower(), "medium")
+
+
+def _article_no_from_ref(norm_ref: str) -> str | None:
+    """Номер статьи из ссылки модели, если она вообще его называет."""
+    match = _ARTICLE_NO_RE.search(norm_ref)
+    return match.group(1) if match else None
 
 
 def classify_document(clauses: list[Clause]) -> str:
@@ -60,9 +74,12 @@ def analyze_clause(
         return None
 
     norm_ref = str(result.get("norm_ref") or hits[0].citation).strip()
-    matched = next(
-        (h for h in hits if h.article_no and h.article_no in norm_ref), hits[0]
-    )
+    article_no = _article_no_from_ref(norm_ref)
+    candidates = [h for h in hits if h.article_no == article_no] if article_no else []
+    # Несколько чанков одной статьи среди hits — берём лучший по скору. Если
+    # модель не назвала статью или назвала ту, которой нет среди hits, значит
+    # именно по верхнему hit пункт и оценивался — это и есть fallback.
+    matched = max(candidates, key=lambda h: h.score) if candidates else hits[0]
     return Finding(
         clause_no=clause.no,
         risk=risk,
