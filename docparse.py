@@ -15,6 +15,23 @@ PREAMBLE_CLAUSE_NO = "преамбула"
 # numbers, header fragments, OCR artefacts) rather than a real text layer.
 MIN_TEXT_LENGTH = 200
 
+# Upper bound on a single clause's text. A clause goes whole into the
+# embedding query and, alongside up to three retrieved chunks of up to 2000
+# chars each (see chunker.MAX_CHARS default), into the model's prompt — with
+# num_ctx=6144 an unbounded clause (e.g. one giant paragraph a document falls
+# back to line-splitting on) risks pushing the system prompt's anti-fabrication
+# rules out of the context window entirely.
+MAX_CLAUSE_CHARS = 2000
+_TRUNCATION_MARK = f" …[пункт обрезан: превышена длина {MAX_CLAUSE_CHARS} символов]"
+
+
+def _cap(text: str) -> str:
+    """Обрезает текст пункта до MAX_CLAUSE_CHARS, явно отмечая обрезку —
+    молчаливая потеря хвоста пункта хуже, чем видимая пометка об этом."""
+    if len(text) <= MAX_CLAUSE_CHARS:
+        return text
+    return text[:MAX_CLAUSE_CHARS] + _TRUNCATION_MARK
+
 
 class DocParseError(RuntimeError):
     """Документ невозможно разобрать — текст показывается пользователю."""
@@ -74,18 +91,18 @@ def split_clauses(text: str, max_clauses: int = 300) -> list[Clause]:
     if len(matches) >= 2:
         leading = re.sub(r"\s+", " ", text[: matches[0].start()]).strip()
         if leading:
-            clauses.append(Clause(no=PREAMBLE_CLAUSE_NO, text=leading))
+            clauses.append(Clause(no=PREAMBLE_CLAUSE_NO, text=_cap(leading)))
         for i, match in enumerate(matches):
             end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
             body = text[match.end() : end].strip()
             body = re.sub(r"\s+", " ", body)
             if body:
-                clauses.append(Clause(no=match.group(1).strip(), text=body))
+                clauses.append(Clause(no=match.group(1).strip(), text=_cap(body)))
     else:
         for i, line in enumerate(
             [ln.strip() for ln in text.split("\n") if ln.strip()], start=1
         ):
-            clauses.append(Clause(no=str(i), text=line))
+            clauses.append(Clause(no=str(i), text=_cap(line)))
 
     if len(clauses) > max_clauses:
         raise DocParseError(

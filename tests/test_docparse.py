@@ -136,6 +136,19 @@ def test_pdf_with_sliver_of_text_reports_scan(tmp_path, monkeypatch):
         docparse.parse_document(path)
 
 
+def test_split_clauses_caps_oversized_clause_text():
+    """Документ без нумерации (или с единственным гигантским абзацем)
+    проваливается в построчную разбивку — без потолка длины один такой
+    "пункт" целиком уходит в промпт модели с num_ctx=6144, вытесняя системные
+    правила."""
+    huge = "А" * (docparse.MAX_CLAUSE_CHARS * 3)
+    clauses = docparse.split_clauses(huge)
+    assert len(clauses) == 1
+    assert len(clauses[0].text) < len(huge)
+    assert clauses[0].text.startswith("А" * docparse.MAX_CLAUSE_CHARS)
+    assert "обрезан" in clauses[0].text
+
+
 def test_no_text_loss(contract):
     text = docparse.extract_text(contract)
     clauses = docparse.parse_document(contract)

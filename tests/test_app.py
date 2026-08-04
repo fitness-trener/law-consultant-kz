@@ -71,12 +71,29 @@ def test_answer_question_returns_answer_with_sources(tmp_path, monkeypatch):
         app_module.retriever, "search", lambda *a, **kw: [_hit()]
     )
     monkeypatch.setattr(
-        app_module.llm, "complete", lambda messages, **kw: "Да, согласно статье 30."
+        app_module.llm,
+        "complete",
+        lambda messages, **kw: "Да (статья 30 Трудового кодекса Республики Казахстан).",
     )
     result = app_module.answer_question(conn, "Нужен ли письменный договор?")
     assert result["refused"] is False
-    assert "статье 30" in result["answer"]
+    assert "статья 30" in result["answer"]
     assert len(result["sources"]) == 1
+
+
+def test_answer_question_refuses_when_citation_not_retrieved(tmp_path, monkeypatch):
+    """Модель сослалась на статью 999, которой не было среди найденных норм —
+    правдоподобная фабрикация, которую и обязан ловить дизайн этого сервиса."""
+    conn = _seed(tmp_path)
+    monkeypatch.setattr(app_module.retriever, "search", lambda *a, **kw: [_hit(article_no="30")])
+    monkeypatch.setattr(
+        app_module.llm,
+        "complete",
+        lambda messages, **kw: "Да (статья 999 Трудового кодекса Республики Казахстан).",
+    )
+    result = app_module.answer_question(conn, "Нужен ли письменный договор?")
+    assert result["refused"] is True
+    assert "статья 999" not in result["answer"]
 
 
 def test_answer_question_refuses_without_hits(tmp_path, monkeypatch):
@@ -98,7 +115,11 @@ def test_answer_question_refuses_without_hits(tmp_path, monkeypatch):
 def test_chat_endpoint_renders_answer(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "get_connection", lambda: _seed(tmp_path))
     monkeypatch.setattr(app_module.retriever, "search", lambda *a, **kw: [_hit()])
-    monkeypatch.setattr(app_module.llm, "complete", lambda messages, **kw: "Ответ.")
+    monkeypatch.setattr(
+        app_module.llm,
+        "complete",
+        lambda messages, **kw: "Ответ. (статья 30 Трудового кодекса Республики Казахстан).",
+    )
     client = TestClient(app_module.app)
     response = client.post("/chat", data={"question": "Нужен ли договор?"})
     assert response.status_code == 200

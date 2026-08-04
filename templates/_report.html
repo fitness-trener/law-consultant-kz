@@ -10,7 +10,7 @@
 {% else %}
   <article class="report">
     <h2>{{ filename }}</h2>
-    <p class="meta">Пунктов проверено: {{ clauses }} · находок: {{ findings|length }}</p>
+    <p class="meta">Пунктов проверено: {{ clauses }} · пропущено: {{ skipped }} · находок: {{ findings|length }}</p>
     {% if findings %}
       <ol class="findings">
         {% for f in findings %}
@@ -26,6 +26,14 @@
           </li>
         {% endfor %}
       </ol>
+      {% if skipped %}
+        <p class="error">Ещё {{ skipped }} пункт(ов) не удалось оценить — по ним риски не проверены.</p>
+      {% endif %}
+    {% elif skipped %}
+      {# Some clauses failed to get a real verdict (model gave no usable risk,
+         or errored out) — the reassuring clean-document message must never
+         appear here, since "no findings" here does not mean "checked and clean". #}
+      <p class="error">Не удалось оценить {{ skipped }} из {{ clauses }} пункт(ов). Анализ неполный — отсутствие находок здесь не означает отсутствие рисков.</p>
     {% else %}
       <p class="clean">Анализ не выявил рисков по загруженным НПА. Это не гарантия — корпус ограничен списком документов ниже.</p>
     {% endif %}

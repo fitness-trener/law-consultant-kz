@@ -6,10 +6,16 @@ from docparse import Clause
 from retriever import Hit
 
 
-def _hit(article_no="113", anchor="z113", score=0.9, chunk_id=1) -> Hit:
+def _hit(
+    article_no="113",
+    anchor="z113",
+    score=0.9,
+    chunk_id=1,
+    act_title="Трудовой кодекс Республики Казахстан",
+) -> Hit:
     return Hit(
         chunk_id=chunk_id,
-        act_title="Трудовой кодекс Республики Казахстан",
+        act_title=act_title,
         article_no=article_no,
         article_title="Сроки выплаты заработной платы",
         part_no=None,
@@ -95,8 +101,9 @@ def test_analyze_document_sorts_by_risk(monkeypatch):
     )
     monkeypatch.setattr(analyzer, "classify_document", lambda clauses: "договор")
     clauses = [Clause(str(i), f"пункт {i}") for i in range(1, 4)]
-    findings = analyzer.analyze_document(None, clauses)
-    assert [f.risk for f in findings] == ["high", "medium", "low"]
+    result = analyzer.analyze_document(None, clauses)
+    assert [f.risk for f in result.findings] == ["high", "medium", "low"]
+    assert result.skipped == 0
 
 
 def test_analyze_document_survives_llm_failure_on_one_clause(monkeypatch):
@@ -117,10 +124,11 @@ def test_analyze_document_survives_llm_failure_on_one_clause(monkeypatch):
     monkeypatch.setattr(analyzer.retriever, "search", lambda *a, **kw: [_hit()])
     monkeypatch.setattr(analyzer.llm, "complete_json", flaky)
     monkeypatch.setattr(analyzer, "classify_document", lambda clauses: "договор")
-    findings = analyzer.analyze_document(
+    result = analyzer.analyze_document(
         None, [Clause("1.", "первый"), Clause("2.", "второй")]
     )
-    assert len(findings) == 1
+    assert len(result.findings) == 1
+    assert result.skipped == 1  # LLMError на первом пункте — это пропуск, не "риска нет"
 
 
 def test_article_match_ignores_short_substring_articles(monkeypatch):
@@ -222,3 +230,54 @@ def test_analyze_document_reports_progress(monkeypatch):
         progress=lambda done, total: seen.append((done, total)),
     )
     assert seen == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_article_match_requires_matching_act(monkeypatch):
+    """Статья 113 существует и в Гражданском, и в Трудовом кодексе — ссылка
+    должна вести на акт, который модель действительно назвала, а не на
+    первый попавшийся hit с тем же номером статьи."""
+    hits = [
+        _hit(
+            article_no="113",
+            anchor="civil113",
+            chunk_id=1,
+            act_title="Гражданский кодекс Республики Казахстан",
+        ),
+        _hit(
+            article_no="113",
+            anchor="labour113",
+            chunk_id=2,
+            act_title="Трудовой кодекс Республики Казахстан",
+        ),
+    ]
+    monkeypatch.setattr(analyzer.retriever, "search", lambda *a, **kw: hits)
+    monkeypatch.setattr(
+        analyzer.llm,
+        "complete_json",
+        lambda messages: {
+            "risk": "high",
+            "quote": "q",
+            "norm_ref": "статья 113 Трудового кодекса Республики Казахстан",
+            "problem": "p",
+            "suggestion": "s",
+        },
+    )
+    finding = analyzer.analyze_clause(None, Clause("1.", "текст"), "договор")
+    assert finding.link.endswith("#labour113")
+    assert "Трудового" in finding.norm_ref
+
+
+def test_analyze_document_counts_missing_risk_as_skipped(monkeypatch):
+    """Модель не вернула поле risk вовсе — это пропуск пункта, а не
+    отсутствие риска, и analyze_document должен это отразить, не просто
+    молча выбросить находку как при настоящем "риска нет"."""
+    monkeypatch.setattr(analyzer.retriever, "search", lambda *a, **kw: [_hit()])
+    monkeypatch.setattr(
+        analyzer.llm,
+        "complete_json",
+        lambda messages: {"quote": "q", "norm_ref": "статья 113", "problem": "p", "suggestion": "s"},
+    )
+    monkeypatch.setattr(analyzer, "classify_document", lambda clauses: "договор")
+    result = analyzer.analyze_document(None, [Clause("1.", "текст")])
+    assert result.findings == []
+    assert result.skipped == 1

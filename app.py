@@ -55,6 +55,15 @@ def answer_question(conn: sqlite3.Connection, question: str) -> dict:
     if not hits:
         return {"answer": prompts.REFUSAL, "sources": [], "refused": True}
     answer = llm.complete(prompts.build_consultation_messages(question, hits))
+    # The retrieved chunks themselves contain cross-references ("статьёй 40
+    # настоящего Кодекса"), so the model citing a real-looking article that was
+    # never retrieved is the likeliest fabrication. Require at least one cited
+    # article to match a retrieved hit before treating this as a grounded
+    # answer — otherwise refuse rather than show an unverified specific claim.
+    cited = set(analyzer.extract_article_numbers(answer))
+    retrieved = {h.article_no for h in hits}
+    if not cited & retrieved:
+        return {"answer": prompts.UNGROUNDED_REFUSAL, "sources": hits, "refused": True}
     return {"answer": answer, "sources": hits, "refused": False}
 
 
@@ -158,6 +167,7 @@ async def analyze(file: UploadFile):
         "findings": None,
         "error": None,
         "clauses": 0,
+        "skipped": 0,
     }
     return {"job_id": job_id}
 
@@ -184,15 +194,17 @@ def analyze_events(job_id: str):
             yield _sse("progress", {"done": 0, "total": len(clauses)})
 
             events: list[str] = []
-            job["findings"] = analyzer.analyze_document(
+            result = analyzer.analyze_document(
                 conn,
                 clauses,
                 progress=lambda done, total: events.append(
                     _sse("progress", {"done": done, "total": total})
                 ),
             )
+            job["findings"] = result.findings
+            job["skipped"] = result.skipped
             yield from events
-            yield _sse("done", {"findings": len(job["findings"])})
+            yield _sse("done", {"findings": len(result.findings), "skipped": result.skipped})
         except (DocParseError, llm.LLMError) as exc:
             job["error"] = str(exc)
             yield _sse("error", {"message": str(exc)})
@@ -227,6 +239,7 @@ def analyze_report(request: Request, job_id: str):
             "request": request,
             "filename": job["filename"],
             "clauses": job["clauses"],
+            "skipped": job.get("skipped", 0),
             "findings": job["findings"],
             "error": job["error"],
             "disclaimer": prompts.DISCLAIMER,

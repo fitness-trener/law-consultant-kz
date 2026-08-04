@@ -53,8 +53,12 @@ def _finding(clause_no="1.1.", risk="high") -> analyzer.Finding:
     )
 
 
+def _result(findings=None, skipped=0) -> analyzer.AnalysisResult:
+    return analyzer.AnalysisResult(findings=findings or [], skipped=skipped)
+
+
 def test_analyze_accepts_docx_and_returns_job_id(client, monkeypatch):
-    monkeypatch.setattr(app_module.analyzer, "analyze_document", lambda *a, **kw: [_finding()])
+    monkeypatch.setattr(app_module.analyzer, "analyze_document", lambda *a, **kw: _result([_finding()]))
     response = client.post(
         "/analyze",
         files={"file": ("contract.docx", _docx_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
@@ -86,7 +90,7 @@ def test_events_stream_reports_progress_and_done(client, monkeypatch):
         for i, _ in enumerate(clauses, start=1):
             if progress:
                 progress(i, len(clauses))
-        return [_finding()]
+        return _result([_finding()])
 
     monkeypatch.setattr(app_module.analyzer, "analyze_document", fake_analyze)
     job_id = client.post(
@@ -103,7 +107,7 @@ def test_report_renders_findings(client, monkeypatch):
     monkeypatch.setattr(
         app_module.analyzer,
         "analyze_document",
-        lambda *a, **kw: [_finding(), _finding("1.2.", "low")],
+        lambda *a, **kw: _result([_finding(), _finding("1.2.", "low")]),
     )
     job_id = client.post(
         "/analyze", files={"file": ("c.docx", _docx_bytes(), "application/octet-stream")}
@@ -122,7 +126,7 @@ def test_report_shows_clean_document_message(client, monkeypatch):
     # Analysis actually completes with zero findings — the clean-document
     # message must still appear. This guards against the "no crash detected"
     # fix collapsing this case into the "not completed" branch instead.
-    monkeypatch.setattr(app_module.analyzer, "analyze_document", lambda *a, **kw: [])
+    monkeypatch.setattr(app_module.analyzer, "analyze_document", lambda *a, **kw: _result([]))
     job_id = client.post(
         "/analyze", files={"file": ("c.docx", _docx_bytes(), "application/octet-stream")}
     ).json()["job_id"]
@@ -131,6 +135,24 @@ def test_report_shows_clean_document_message(client, monkeypatch):
     report = client.get(f"/analyze/{job_id}/report")
     assert "не выявил" in report.text.lower()
     assert 'class="error"' not in report.text
+
+
+def test_report_shows_skipped_instead_of_clean_message(client, monkeypatch):
+    """Пункты пропали не потому, что рисков нет, а потому, что их не удалось
+    оценить (LLMError / отсутствующий risk) — отчёт обязан это показать, а не
+    успокоительное "рисков не выявлено" ровно на той странице, чей смысл —
+    сказать пользователю, безопасен ли его договор."""
+    monkeypatch.setattr(
+        app_module.analyzer, "analyze_document", lambda *a, **kw: _result([], skipped=2)
+    )
+    job_id = client.post(
+        "/analyze", files={"file": ("c.docx", _docx_bytes(), "application/octet-stream")}
+    ).json()["job_id"]
+    with client.stream("GET", f"/analyze/{job_id}/events") as stream:
+        list(stream.iter_text())
+    report = client.get(f"/analyze/{job_id}/report")
+    assert "не выявил" not in report.text.lower()
+    assert "2" in report.text
 
 
 def test_unexpected_exception_produces_error_not_clean_report(client, monkeypatch):
