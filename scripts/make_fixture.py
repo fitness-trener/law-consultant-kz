@@ -9,15 +9,21 @@ import httpx
 URL = "https://adilet.zan.kz/rus/docs/K1500000414"
 CIVIL_CODE_URL = "https://adilet.zan.kz/rus/docs/K940001000_"
 REPEALED_TAX_CODE_URL = "https://adilet.zan.kz/rus/docs/K1700000120"
+BANKS_LAW_URL = "https://adilet.zan.kz/rus/docs/Z950002444_"
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 OUT = FIXTURES_DIR / "labour_code_sample.html"
 IZPI_OUT = FIXTURES_DIR / "labour_code_izpi_sample.html"
 CHAPTER_OUT = FIXTURES_DIR / "labour_code_chapter_heading_sample.html"
 CIVIL_CODE_H3_OUT = FIXTURES_DIR / "civil_code_h3_articles_sample.html"
 REPEALED_TAX_CODE_OUT = FIXTURES_DIR / "tax_code_2017_repealed_sample.html"
+BANKS_LAW_P_ID_OUT = FIXTURES_DIR / "banks_law_p_id_anchor_sample.html"
 
 # якорь сразу перед «Статья N.» — так выглядят нормальные заголовки статей
 HEADING_RE = re.compile(r'<a name="z(\d+)"></a>Статья ')
+# заголовок статьи 52-1 Закона о банках — контрольная точка отсчёта фрагмента
+# формы C (см. make_banks_law_p_id_fixture): её якорь оформлен нормально,
+# <a name="…"></a>, а вот у статей 52-2/52-3 сразу за ней — уже нет.
+ARTICLE_52_1_RE = re.compile(r'<a name="z\d+"></a>Статья 52-1\.')
 # любой <h3>…</h3> целиком — в старых актах (Гражданский кодекс) в этой
 # форме идут и заголовки статей, и заголовки глав/разделов/частей
 # (см. scraper._heading_text)
@@ -197,6 +203,48 @@ def make_repealed_tax_code_fixture(html: str) -> int:
     return 0
 
 
+def make_banks_law_p_id_fixture(html: str) -> int:
+    """Фикстура статей 52-1 - 52-3 Закона о банках — третья форма якоря
+    заголовка статьи (Item 1 финального ревью): якорь не в <a name> внутри
+    жирного текста, а в id самого <p>, несущего заголовок, например
+    <p id="z113"> <b>Статья 52-2. …</b></p> — вовсе без <a name>. Статья
+    52-1 остаётся в фикстуре как контрольная форма A (<a name="z112">),
+    чтобы тест проверял обе формы бок о бок."""
+    start_m = ARTICLE_52_1_RE.search(html)
+    end_idx = html.find("Статья 52-4.")
+    if start_m is None or end_idx == -1:
+        print("Не найдены заголовки статей 52-1 и 52-4 (проверьте вёрстку)", file=sys.stderr)
+        return 1
+    start = html.rfind("<p", 0, start_m.start())
+    end = html.rfind("<p", 0, end_idx)
+    if start == -1 or end == -1 or end <= start:
+        print("Не удалось вырезать фрагмент статей 52-1 - 52-3", file=sys.stderr)
+        return 1
+    body = html[start:end]
+    if (
+        'id="z113"' not in body
+        or 'id="z114"' not in body
+        or "Статья 52-2." not in body
+        or "Статья 52-3." not in body
+    ):
+        print(
+            "В вырезанном фрагменте нет ожидаемых заголовков статей 52-2/52-3 "
+            "в форме id на <p> без <a name> — вёрстка adilet могла измениться",
+            file=sys.stderr,
+        )
+        return 1
+    BANKS_LAW_P_ID_OUT.parent.mkdir(parents=True, exist_ok=True)
+    BANKS_LAW_P_ID_OUT.write_text(
+        "<html><body><h1>О банках и банковской деятельности в Республике Казахстан</h1>"
+        f'<div class="text_upd">{body}</div></body></html>',
+        encoding="utf-8",
+    )
+    print(
+        f"Фикстура записана: {BANKS_LAW_P_ID_OUT} ({BANKS_LAW_P_ID_OUT.stat().st_size} байт)"
+    )
+    return 0
+
+
 def main() -> int:
     html = _fetch()
     status = make_basic_fixture(html)
@@ -213,7 +261,11 @@ def main() -> int:
     if status != 0:
         return status
     repealed_html = _fetch(REPEALED_TAX_CODE_URL)
-    return make_repealed_tax_code_fixture(repealed_html)
+    status = make_repealed_tax_code_fixture(repealed_html)
+    if status != 0:
+        return status
+    banks_law_html = _fetch(BANKS_LAW_URL)
+    return make_banks_law_p_id_fixture(banks_law_html)
 
 
 if __name__ == "__main__":

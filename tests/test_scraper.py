@@ -11,12 +11,20 @@ IZPI_FIXTURE = Path(__file__).parent / "fixtures" / "labour_code_izpi_sample.htm
 CHAPTER_FIXTURE = Path(__file__).parent / "fixtures" / "labour_code_chapter_heading_sample.html"
 CIVIL_CODE_H3_FIXTURE = Path(__file__).parent / "fixtures" / "civil_code_h3_articles_sample.html"
 REPEALED_TAX_CODE_FIXTURE = Path(__file__).parent / "fixtures" / "tax_code_2017_repealed_sample.html"
+BANKS_LAW_P_ID_FIXTURE = Path(__file__).parent / "fixtures" / "banks_law_p_id_anchor_sample.html"
 
 SOURCE = Source(
     key="labour_code",
     title="Трудовой кодекс Республики Казахстан",
     url="https://adilet.zan.kz/rus/docs/K1500000414",
     doc_type="кодекс",
+)
+
+BANKS_LAW_SOURCE = Source(
+    key="banks_law",
+    title="О банках и банковской деятельности в Республике Казахстан",
+    url="https://adilet.zan.kz/rus/docs/Z950002444_",
+    doc_type="закон",
 )
 
 CIVIL_CODE_SOURCE = Source(
@@ -50,6 +58,11 @@ def civil_code_h3_html() -> str:
 @pytest.fixture
 def repealed_tax_code_html() -> str:
     return REPEALED_TAX_CODE_FIXTURE.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def banks_law_p_id_html() -> str:
+    return BANKS_LAW_P_ID_FIXTURE.read_text(encoding="utf-8")
 
 
 def test_parse_act_reads_title(html):
@@ -322,6 +335,31 @@ def test_parse_act_raises_for_repealed_act(repealed_tax_code_html):
     заголовком статьи 1 (см. scraper.REPEALED_RE)."""
     with pytest.raises(ScrapeError, match="утратившим силу"):
         parse_act(repealed_tax_code_html, SOURCE)
+
+
+def test_p_id_anchor_form_is_recognised_for_article_heading(banks_law_p_id_html):
+    """Item 1 финального ревью: третья форма якоря заголовка статьи на
+    adilet — не <a name> внутри жирного текста и не id на <h3>, а id
+    самого заголовочного <p>, например
+    <p id="z113"> <b>Статья 52-2. …</b></p> — вовсе без <a name>. Раньше
+    такой заголовок не находил своего якоря и статья 52-2 оставалась без
+    анкора (в корпусе — делила якорь/пустоту с соседями, см.
+    scraper._own_anchor / parse_act)."""
+    act = parse_act(banks_law_p_id_html, BANKS_LAW_SOURCE)
+    numbers = [a.number for a in act.articles]
+    assert numbers == ["52-1", "52-2", "52-3"], numbers
+
+    article_52_1 = act.articles[0]
+    assert article_52_1.anchor == "z112", "форма A (<a name>) рядом должна продолжать работать"
+
+    article_52_2 = next(a for a in act.articles if a.number == "52-2")
+    assert article_52_2.anchor == "z113"
+
+    article_52_3 = next(a for a in act.articles if a.number == "52-3")
+    assert article_52_3.anchor == "z114"
+
+    anchors = [a.anchor for a in act.articles if a.anchor]
+    assert len(anchors) == len(set(anchors)), f"якоря статей не уникальны: {anchors}"
 
 
 def test_parse_act_does_not_raise_for_act_in_force(html, civil_code_h3_html):

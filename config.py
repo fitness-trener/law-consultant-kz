@@ -8,7 +8,9 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).parent
-VALID_PROVIDERS = {"ollama", "anthropic", "openai"}
+# Единственный провайдер, который реально умеет llm.py — см. комментарий у
+# llm._check_provider о том, где добавлять следующий.
+VALID_PROVIDERS = {"ollama"}
 
 
 @dataclass(frozen=True)

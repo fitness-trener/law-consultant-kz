@@ -44,6 +44,16 @@ def test_load_settings_rejects_unknown_provider(monkeypatch):
         load_settings()
 
 
+def test_load_settings_rejects_anthropic_and_openai(monkeypatch):
+    """anthropic/openai раньше значились как допустимые значения
+    LLM_PROVIDER, хотя llm.py умеет только ollama — список допустимых
+    значений сузили до того, что реально работает (см. llm._check_provider)."""
+    for provider in ("anthropic", "openai"):
+        monkeypatch.setenv("LLM_PROVIDER", provider)
+        with pytest.raises(ValueError, match="LLM_PROVIDER"):
+            load_settings()
+
+
 def test_load_sources_returns_acts():
     sources = load_sources()
     assert len(sources) >= 20

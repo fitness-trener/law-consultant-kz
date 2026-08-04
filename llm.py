@@ -1,7 +1,9 @@
-"""Провайдер-агностичный доступ к языковой модели.
+"""Доступ к языковой модели.
 
-Сейчас реализован Ollama. Переключение на anthropic/openai — через
-LLM_PROVIDER в .env, без изменения вызывающего кода.
+Реализован только Ollama (LLM_PROVIDER=ollama — единственное допустимое
+значение, см. config.VALID_PROVIDERS). Добавление второго провайдера — это
+новый клиент рядом с _post/_client и ветка в _check_provider ниже, без
+изменения вызывающего кода (complete/complete_json/embed/health_check).
 """
 from __future__ import annotations
 
@@ -33,6 +35,10 @@ def _client() -> httpx.Client:
 
 
 def _check_provider() -> None:
+    # config.load_settings уже отвергает всё, кроме "ollama" — это защита на
+    # случай, если Settings собрали в обход неё (см. test_llm.py). Здесь же
+    # будет жить ветка нового провайдера, когда он появится: свой _client,
+    # свой блок в _post, и эта проверка станет пропускать оба значения.
     if SETTINGS.llm_provider != "ollama":
         raise LLMError(
             f"Провайдер {SETTINGS.llm_provider} ещё не реализован. "
