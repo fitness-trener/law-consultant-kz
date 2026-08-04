@@ -1,5 +1,7 @@
 import dataclasses
 import io
+import os
+import time
 
 import pytest
 from docx import Document
@@ -117,6 +119,9 @@ def test_report_renders_findings(client, monkeypatch):
 
 
 def test_report_shows_clean_document_message(client, monkeypatch):
+    # Analysis actually completes with zero findings — the clean-document
+    # message must still appear. This guards against the "no crash detected"
+    # fix collapsing this case into the "not completed" branch instead.
     monkeypatch.setattr(app_module.analyzer, "analyze_document", lambda *a, **kw: [])
     job_id = client.post(
         "/analyze", files={"file": ("c.docx", _docx_bytes(), "application/octet-stream")}
@@ -125,10 +130,65 @@ def test_report_shows_clean_document_message(client, monkeypatch):
         list(stream.iter_text())
     report = client.get(f"/analyze/{job_id}/report")
     assert "не выявил" in report.text.lower()
+    assert 'class="error"' not in report.text
+
+
+def test_unexpected_exception_produces_error_not_clean_report(client, monkeypatch):
+    def boom(*a, **kw):
+        raise RuntimeError("db connection reset by peer")
+
+    monkeypatch.setattr(app_module.analyzer, "analyze_document", boom)
+    job_id = client.post(
+        "/analyze", files={"file": ("c.docx", _docx_bytes(), "application/octet-stream")}
+    ).json()["job_id"]
+
+    with client.stream("GET", f"/analyze/{job_id}/events") as stream:
+        payload = "".join(chunk for chunk in stream.iter_text())
+    assert "event: error" in payload
+    assert "db connection reset by peer" not in payload  # raw exception must not leak
+
+    report = client.get(f"/analyze/{job_id}/report")
+    assert report.status_code == 200
+    assert "не выявил" not in report.text.lower()
+    assert "Справочная информация" in report.text  # disclaimer still shown on error
 
 
 def test_report_for_unknown_job_returns_404(client):
     assert client.get("/analyze/нет-такого/report").status_code == 404
+
+
+def test_stale_upload_swept_but_active_job_kept(client, monkeypatch, tmp_path):
+    upload_dir = tmp_path / "uploads"
+    upload_dir.mkdir()
+    monkeypatch.setattr(
+        app_module, "SETTINGS", dataclasses.replace(app_module.SETTINGS, upload_dir=upload_dir)
+    )
+    # Retention window forced to 0: if the sweep only checked age, it would
+    # delete everything below, including the in-flight job's file.
+    monkeypatch.setattr(app_module, "STALE_UPLOAD_RETENTION_SECONDS", 0)
+
+    stale = upload_dir / "old.pdf"
+    stale.write_bytes(b"stale contract")
+    old_time = time.time() - 100
+    os.utime(stale, (old_time, old_time))
+
+    active_path = upload_dir / "active.docx"
+    active_path.write_bytes(b"in-flight contract")
+    os.utime(active_path, (old_time, old_time))
+    app_module.JOBS["job-active"] = {
+        "path": active_path,
+        "filename": "active.docx",
+        "findings": None,
+        "error": None,
+        "clauses": 0,
+    }
+
+    response = client.post(
+        "/analyze", files={"file": ("new.docx", _docx_bytes(), "application/octet-stream")}
+    )
+    assert response.status_code == 200
+    assert not stale.exists()
+    assert active_path.exists()
 
 
 def test_scan_pdf_reported_in_stream(client, monkeypatch):

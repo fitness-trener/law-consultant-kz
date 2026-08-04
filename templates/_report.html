@@ -1,6 +1,12 @@
 {% if error %}
   <div class="error">{{ error }}</div>
   <p class="disclaimer">{{ disclaimer }}</p>
+{% elif findings is none %}
+  {# Analysis never finished and produced no error either (e.g. report
+     requested mid-stream). Never show the clean-document message here — that
+     message must only ever mean "we checked and found nothing". #}
+  <div class="error">Анализ ещё не завершён или был прерван без результата.</div>
+  <p class="disclaimer">{{ disclaimer }}</p>
 {% else %}
   <article class="report">
     <h2>{{ filename }}</h2>

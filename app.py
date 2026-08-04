@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
+import time
 import uuid
 from pathlib import Path
 from typing import Iterator
@@ -21,6 +23,7 @@ from config import ROOT, load_settings
 from docparse import DocParseError, parse_document
 
 SETTINGS = load_settings()
+logger = logging.getLogger(__name__)
 app = FastAPI(title="Юридический консультант по НПА РК")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
@@ -83,6 +86,28 @@ def chat(request: Request, question: str = Form(...)):
 ALLOWED_SUFFIXES = {".docx", ".pdf"}
 JOBS: dict[str, dict] = {}
 
+# Uploaded contracts sit on disk until the events stream deletes them in its
+# finally block. A client that uploads and never opens the stream would leave
+# the file there forever, so every new upload sweeps anything older than this.
+STALE_UPLOAD_RETENTION_SECONDS = 60 * 60  # 1 hour
+
+
+def _sweep_stale_uploads() -> None:
+    if not SETTINGS.upload_dir.exists():
+        return
+    # Never touch a path a tracked job still owns, no matter its age.
+    active_paths = {job["path"] for job in JOBS.values()}
+    cutoff = time.time() - STALE_UPLOAD_RETENTION_SECONDS
+    for entry in SETTINGS.upload_dir.iterdir():
+        if entry in active_paths or not entry.is_file():
+            continue
+        try:
+            if entry.stat().st_mtime < cutoff:
+                entry.unlink()
+        except OSError:
+            # ponytail: best-effort cleanup — one bad file must not fail the upload.
+            logger.exception("Не удалось удалить устаревший файл %s", entry)
+
 
 @app.post("/analyze")
 async def analyze(file: UploadFile):
@@ -100,6 +125,7 @@ async def analyze(file: UploadFile):
         )
 
     SETTINGS.upload_dir.mkdir(parents=True, exist_ok=True)
+    _sweep_stale_uploads()
     job_id = uuid.uuid4().hex
     path = SETTINGS.upload_dir / f"{job_id}{suffix}"
     path.write_bytes(payload)
@@ -147,6 +173,18 @@ def analyze_events(job_id: str):
         except (DocParseError, llm.LLMError) as exc:
             job["error"] = str(exc)
             yield _sse("error", {"message": str(exc)})
+        except Exception:
+            # Any other failure (DB fault, analyzer bug, disk error, ...) must
+            # never fall through silently: job["findings"] would stay None and
+            # the report template would render the reassuring "no risks found"
+            # message over a document that was never actually checked.
+            logger.exception("Ошибка анализа документа job_id=%s", job_id)
+            message = (
+                "Не удалось завершить анализ документа из-за внутренней ошибки. "
+                "Документ проверен не полностью, результатам доверять нельзя."
+            )
+            job["error"] = message
+            yield _sse("error", {"message": message})
         finally:
             if conn is not None:
                 conn.close()
@@ -166,7 +204,7 @@ def analyze_report(request: Request, job_id: str):
             "request": request,
             "filename": job["filename"],
             "clauses": job["clauses"],
-            "findings": job["findings"] or [],
+            "findings": job["findings"],
             "error": job["error"],
             "disclaimer": prompts.DISCLAIMER,
         },
