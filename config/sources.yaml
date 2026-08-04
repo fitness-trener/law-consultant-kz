@@ -73,9 +73,11 @@ sources:
     title: О жилищных отношениях
     url: https://adilet.zan.kz/rus/docs/Z970000094_
     doc_type: закон
+  # Закон № 258-VIII от 16.01.2026. Прежний закон 1995 года (Z950002444_)
+  # утратил силу — не подключать.
   - key: banks_law
     title: О банках и банковской деятельности в Республике Казахстан
-    url: https://adilet.zan.kz/rus/docs/Z950002444_
+    url: https://adilet.zan.kz/rus/docs/Z2600000258
     doc_type: закон
   - key: permits_law
     title: О разрешениях и уведомлениях
