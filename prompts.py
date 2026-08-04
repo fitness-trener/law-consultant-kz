@@ -46,3 +46,48 @@ def build_consultation_messages(question: str, hits: list[Hit]) -> list[dict[str
             ),
         },
     ]
+
+
+SYSTEM_ANALYST = """Ты — юрист, проверяющий документ на соответствие законодательству Республики Казахстан.
+
+Жёсткие правила:
+1. Оценивай пункт ТОЛЬКО по нормам из блока «Контекст». Норм нет — риска нет.
+2. Не выдумывай нарушения. Формальные и безобидные пункты получают risk = "none".
+3. quote — дословный фрагмент из пункта документа, ничего не переписывай.
+4. suggestion — готовая формулировка на замену, а не совет что подумать.
+5. Отвечай ТОЛЬКО JSON-объектом, без пояснений вокруг.
+
+Формат ответа:
+{"risk": "none|low|medium|high", "quote": "...", "norm_ref": "статья N <название НПА>", "problem": "...", "suggestion": "..."}
+"""
+
+DOC_TYPES = ["договор", "устав", "приказ", "исковое заявление", "прочее"]
+
+
+def build_classification_messages(sample: str) -> list[dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Определи тип юридического документа. Ответь ТОЛЬКО JSON-объектом "
+                'вида {"doc_type": "<тип>"}, где тип — одно из: '
+                + ", ".join(DOC_TYPES)
+            ),
+        },
+        {"role": "user", "content": f"Начало документа:\n{sample}"},
+    ]
+
+
+def build_clause_messages(clause, doc_type: str, hits: list[Hit]) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": SYSTEM_ANALYST},
+        {
+            "role": "user",
+            "content": (
+                f"Тип документа: {doc_type}\n\n"
+                f"Контекст (нормы законодательства РК):\n{format_context(hits)}\n\n"
+                f"Пункт документа {clause.no}:\n{clause.text}\n\n"
+                "Оцени пункт и верни JSON."
+            ),
+        },
+    ]
