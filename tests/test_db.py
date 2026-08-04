@@ -81,6 +81,87 @@ def test_foreign_key_enforced(tmp_path):
         )
 
 
+def test_delete_act_cascades_to_fts_and_vec(tmp_path):
+    conn = db.connect(tmp_path / "t.db")
+    db.create_schema(conn)
+    conn.execute(
+        "INSERT INTO acts (id, title, adilet_url, doc_type, revision_date, scraped_at)"
+        " VALUES (1, 'ТК РК', 'https://x', 'кодекс', '2026-07-01', '2026-08-04')"
+    )
+    conn.execute(
+        "INSERT INTO chunks (id, act_id, article_no, article_title, part_no, text,"
+        " char_len, anchor) VALUES (1, 1, '1', 'Понятия', NULL,"
+        " 'Трудовой договор заключается в письменной форме', 46, 'z1')"
+    )
+    conn.execute(
+        "INSERT INTO vec_chunks (chunk_id, embedding) VALUES (?, ?)",
+        (1, db.serialize_vector([0.5] * 1024)),
+    )
+    conn.commit()
+
+    conn.execute("DELETE FROM acts WHERE id = 1")
+    conn.commit()
+
+    assert conn.execute("SELECT count(*) FROM chunks").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM chunks_fts").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM vec_chunks").fetchone()[0] == 0
+
+
+def test_delete_chunk_removes_fts_and_vec_rows(tmp_path):
+    conn = db.connect(tmp_path / "t.db")
+    db.create_schema(conn)
+    conn.execute(
+        "INSERT INTO acts (id, title, adilet_url, doc_type, revision_date, scraped_at)"
+        " VALUES (1, 'ТК РК', 'https://x', 'кодекс', '2026-07-01', '2026-08-04')"
+    )
+    conn.execute(
+        "INSERT INTO chunks (id, act_id, article_no, article_title, part_no, text,"
+        " char_len, anchor) VALUES (1, 1, '30', 'Договор', NULL,"
+        " 'Трудовой договор заключается в письменной форме', 46, 'z30')"
+    )
+    conn.execute(
+        "INSERT INTO vec_chunks (chunk_id, embedding) VALUES (?, ?)",
+        (1, db.serialize_vector([0.5] * 1024)),
+    )
+    conn.commit()
+
+    conn.execute("DELETE FROM chunks WHERE id = 1")
+    conn.commit()
+
+    assert conn.execute("SELECT count(*) FROM chunks_fts").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM vec_chunks").fetchone()[0] == 0
+
+
+def test_update_chunk_text_keeps_fts_in_sync(tmp_path):
+    conn = db.connect(tmp_path / "t.db")
+    db.create_schema(conn)
+    conn.execute(
+        "INSERT INTO acts (id, title, adilet_url, doc_type, revision_date, scraped_at)"
+        " VALUES (1, 'ТК РК', 'https://x', 'кодекс', '2026-07-01', '2026-08-04')"
+    )
+    conn.execute(
+        "INSERT INTO chunks (id, act_id, article_no, article_title, part_no, text,"
+        " char_len, anchor) VALUES (1, 1, '30', 'Договор', NULL,"
+        " 'Трудовой договор заключается в письменной форме', 46, 'z30')"
+    )
+    conn.commit()
+
+    conn.execute(
+        "UPDATE chunks SET text = ? WHERE id = 1",
+        ("Коллективный договор регулирует отношения сторон",),
+    )
+    conn.commit()
+
+    old_rows = conn.execute(
+        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'заключается'"
+    ).fetchall()
+    new_rows = conn.execute(
+        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'коллективный'"
+    ).fetchall()
+    assert old_rows == []
+    assert [r[0] for r in new_rows] == [1]
+
+
 def test_corpus_summary_lists_acts(tmp_path):
     conn = db.connect(tmp_path / "t.db")
     db.create_schema(conn)
