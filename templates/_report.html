@@ -1,0 +1,28 @@
+{% if error %}
+  <div class="error">{{ error }}</div>
+  <p class="disclaimer">{{ disclaimer }}</p>
+{% else %}
+  <article class="report">
+    <h2>{{ filename }}</h2>
+    <p class="meta">Пунктов проверено: {{ clauses }} · находок: {{ findings|length }}</p>
+    {% if findings %}
+      <ol class="findings">
+        {% for f in findings %}
+          <li class="finding risk-{{ f.risk }}">
+            <div class="head">
+              <span class="badge">{{ f.risk }}</span>
+              <span class="clause">пункт {{ f.clause_no }}</span>
+              <a href="{{ f.link }}" target="_blank" rel="noopener">{{ f.norm_ref }}</a>
+            </div>
+            <blockquote>{{ f.quote }}</blockquote>
+            <p class="problem">{{ f.problem }}</p>
+            <p class="suggestion"><strong>Предлагаемая формулировка:</strong> {{ f.suggestion }}</p>
+          </li>
+        {% endfor %}
+      </ol>
+    {% else %}
+      <p class="clean">Анализ не выявил рисков по загруженным НПА. Это не гарантия — корпус ограничен списком документов ниже.</p>
+    {% endif %}
+    <p class="disclaimer">{{ disclaimer }}</p>
+  </article>
+{% endif %}

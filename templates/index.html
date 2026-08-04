@@ -15,7 +15,15 @@
 </section>
 
 <section id="pane-doc" class="pane" hidden>
-  <p>Загрузка документов подключается в следующей задаче.</p>
+  <form id="upload-form">
+    <input type="file" name="file" accept=".docx,.pdf" required>
+    <button type="submit">Проверить документ</button>
+  </form>
+  <div id="progress" hidden>
+    <progress id="progress-bar" value="0" max="1"></progress>
+    <span id="progress-text"></span>
+  </div>
+  <div id="report"></div>
 </section>
 
 <aside class="corpus">
@@ -36,6 +44,45 @@ document.querySelectorAll('.tab').forEach(function (tab) {
     document.querySelectorAll('.pane').forEach(function (p) { p.hidden = true; });
     tab.classList.add('active');
     document.getElementById(tab.dataset.target).hidden = false;
+  });
+});
+</script>
+
+<script>
+document.getElementById('upload-form').addEventListener('submit', async function (event) {
+  event.preventDefault();
+  var report = document.getElementById('report');
+  var progress = document.getElementById('progress');
+  var bar = document.getElementById('progress-bar');
+  var text = document.getElementById('progress-text');
+  report.innerHTML = '';
+  progress.hidden = false;
+  text.textContent = 'Разбираю документ…';
+
+  var response = await fetch('/analyze', { method: 'POST', body: new FormData(event.target) });
+  if (!response.ok) {
+    progress.hidden = true;
+    report.innerHTML = '<div class="error">' + (await response.json()).detail + '</div>';
+    return;
+  }
+  var jobId = (await response.json()).job_id;
+  var source = new EventSource('/analyze/' + jobId + '/events');
+
+  source.addEventListener('progress', function (e) {
+    var data = JSON.parse(e.data);
+    bar.max = data.total;
+    bar.value = data.done;
+    text.textContent = 'Проверено пунктов: ' + data.done + ' из ' + data.total;
+  });
+  source.addEventListener('done', async function () {
+    source.close();
+    progress.hidden = true;
+    report.innerHTML = await (await fetch('/analyze/' + jobId + '/report')).text();
+  });
+  source.addEventListener('error', async function (e) {
+    source.close();
+    progress.hidden = true;
+    report.innerHTML = await (await fetch('/analyze/' + jobId + '/report')).text();
   });
 });
 </script>

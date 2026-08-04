@@ -68,7 +68,11 @@ END;
 
 
 def connect(path: Path | str | None = None) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(path or SETTINGS.db_path))
+    # check_same_thread=False: Starlette's StreamingResponse resumes a sync
+    # generator via anyio's threadpool, and successive `next()` calls are not
+    # guaranteed to land on the same worker thread. Access here is always
+    # sequential (one generator, never concurrent), so this is safe.
+    conn = sqlite3.connect(str(path or SETTINGS.db_path), check_same_thread=False)
     conn.enable_load_extension(True)
     sqlite_vec.load(conn)
     conn.enable_load_extension(False)

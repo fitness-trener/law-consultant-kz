@@ -21,3 +21,21 @@ button[type=submit] { margin-top: 8px; padding: 9px 18px; background: var(--acce
 .corpus { margin-top: 32px; border-top: 1px solid var(--line); padding-top: 16px; }
 .corpus h2 { font-size: 15px; color: var(--muted); }
 .corpus ul { padding-left: 18px; font-size: 14px; }
+.report { border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-top: 18px; }
+.report h2 { font-size: 18px; margin: 0 0 4px; }
+.meta { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+.findings { list-style: none; padding: 0; }
+.finding { border-left: 4px solid var(--line); padding: 10px 14px; margin-bottom: 16px; background: #fafafa; border-radius: 0 6px 6px 0; }
+.finding.risk-high { border-left-color: #d33; }
+.finding.risk-medium { border-left-color: #e90; }
+.finding.risk-low { border-left-color: #999; }
+.head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 14px; }
+.badge { text-transform: uppercase; font-size: 11px; letter-spacing: .04em; padding: 2px 7px; border-radius: 3px; background: #eee; }
+.risk-high .badge { background: #fde3e3; color: #a11; }
+.risk-medium .badge { background: #fdf0d5; color: #96690a; }
+.clause { color: var(--muted); }
+blockquote { margin: 10px 0; padding-left: 12px; border-left: 2px solid var(--line); color: #333; font-style: italic; }
+.suggestion { background: #f0f6ff; padding: 8px 10px; border-radius: 4px; }
+.clean { color: #2a7; }
+#progress { margin-top: 16px; display: flex; gap: 12px; align-items: center; }
+progress { width: 260px; }
