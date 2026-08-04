@@ -19,6 +19,24 @@ RRF_K = 60
 CANDIDATES = 20
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 
+# Русские стоп-слова: не должны в одиночку "спасать" запрос от отказа —
+# они встречаются почти в любом юридическом тексте, поэтому FTS-совпадение
+# только по ним не говорит о релевантности.
+STOPWORDS: frozenset[str] = frozenset(
+    {
+        "как", "что", "чего", "чему", "чем", "где", "когда", "куда", "зачем", "почему",
+        "кто", "кого", "кому", "это", "этот", "эта", "эти", "тот", "той",
+        "для", "при", "над", "под", "про", "без", "через", "между",
+        "если", "чтобы", "или", "либо", "ибо", "так", "там", "тут",
+        "уже", "ещё", "еще",
+        "был", "была", "было", "были", "быть", "есть", "нет",
+        "все", "всё", "весь", "вся", "свой", "своя", "свои",
+        "его", "её", "ее", "их", "они", "оно", "она",
+        "мне", "мной", "меня", "вам", "вас", "нам", "нас", "ним", "них", "ему", "ней",
+        "будет", "может", "можно", "нужно", "надо",
+    }
+)
+
 EmbedFn = Callable[[list[str]], list[list[float]]]
 
 
@@ -47,7 +65,9 @@ class Hit:
 def _fts_query(text: str) -> str:
     """Превращает свободный ввод в безопасный запрос FTS5."""
     words = _WORD_RE.findall(text.lower())
-    return " OR ".join(f'"{w}"' for w in words if len(w) > 2)
+    return " OR ".join(
+        f'"{w}"' for w in words if len(w) > 2 and w not in STOPWORDS
+    )
 
 
 def _vector_candidates(
@@ -100,15 +120,18 @@ def search(
     if not vector_ids and not fts_ids:
         return []
 
-    fused = _fuse(vector_ids, fts_ids)[:k]
+    fused = _fuse(vector_ids, fts_ids)
     if not fused:
         return []
 
+    # Строки тянем для всех кандидатов, не только для первых k: длинные статьи
+    # дают несколько чанков, и обрезать по k нужно уже после дедупликации по
+    # статье — иначе одна статья в нескольких чанках вытесняет остальные нормы.
     placeholders = ",".join("?" * len(fused))
     rows = conn.execute(
         f"""
         SELECT c.id, a.title, c.article_no, c.article_title, c.part_no, c.text,
-               a.adilet_url, c.anchor, a.revision_date
+               a.adilet_url, c.anchor, a.revision_date, a.id
         FROM chunks c JOIN acts a ON a.id = c.act_id
         WHERE c.id IN ({placeholders})
         """,
@@ -116,11 +139,16 @@ def search(
     ).fetchall()
 
     by_id = {row[0]: row for row in rows}
+    seen_articles: set[tuple[int, str]] = set()
     hits: list[Hit] = []
     for chunk_id, score in fused:
         row = by_id.get(chunk_id)
         if row is None:
             continue
+        article_key = (row[9], row[2])
+        if article_key in seen_articles:
+            continue
+        seen_articles.add(article_key)
         hits.append(
             Hit(
                 chunk_id=row[0],
@@ -135,4 +163,6 @@ def search(
                 score=score,
             )
         )
+        if len(hits) >= k:
+            break
     return hits

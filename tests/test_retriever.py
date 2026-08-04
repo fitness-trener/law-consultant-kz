@@ -91,3 +91,62 @@ def test_fts_query_with_special_characters_does_not_crash(tmp_path):
         _conn(tmp_path), 'договор AND "ущерб OR (', k=2, embed_fn=_embed
     )
     assert isinstance(hits, list)
+
+
+def test_stopword_only_match_returns_empty(tmp_path):
+    """FTS-совпадение только по стоп-слову не должно спасать запрос от отказа.
+
+    "чем" входит в текст статьи 30 ("не менее чем в двух экземплярах") и до
+    фикса проходит фильтр длины (len > 2), поэтому FTS находит статью 30 —
+    хотя ни один словарный признак псевдо-эмбеддинга не совпадает с запросом,
+    и векторный порог не пройден.
+    """
+    hits = retriever.search(_conn(tmp_path), "чем", k=4, embed_fn=_embed)
+    assert hits == []
+
+
+def test_stopwords_only_query_returns_empty_without_crashing(tmp_path):
+    """Запрос из одних стоп-слов не должен падать и не должен ничего находить."""
+    hits = retriever.search(_conn(tmp_path), "что как это", k=4, embed_fn=_embed)
+    assert hits == []
+
+
+def _dedupe_act() -> Act:
+    """Статья 123 растянута так, что режется минимум на два чанка — они не
+    должны вытеснять из выдачи остальные, различные по смыслу статьи."""
+    ущерб_sentence = (
+        "Работник несёт материальную ответственность за причинённый "
+        "работодателю прямой действительный ущерб. "
+    )
+    texts = {
+        "123": ущерб_sentence * 30,
+        "10": "Трудовой договор заключается в письменной форме не менее чем в двух "
+              "экземплярах и подписывается сторонами. " * 3,
+        "11": "Ежегодный оплачиваемый трудовой отпуск работникам предоставляется "
+              "продолжительностью двадцать четыре календарных дня. " * 3,
+        "12": "Работник обязан возместить работодателю понесённые расходы. " * 3,
+    }
+    return Act(
+        key="labour_code_dedupe",
+        title="Трудовой кодекс Республики Казахстан",
+        url="https://adilet.zan.kz/rus/docs/K1500000414",
+        doc_type="кодекс",
+        revision_date="2026-06-11",
+        articles=[
+            Article(number=n, title=f"Статья {n}", anchor=f"z{n}", text=t)
+            for n, t in texts.items()
+        ],
+    )
+
+
+def test_dedup_keeps_one_chunk_per_article(tmp_path):
+    """Несколько чанков одной статьи не должны занимать несколько мест в выдаче."""
+    conn = db.connect(tmp_path / "dedup.db")
+    db.create_schema(conn)
+    indexer.index_act(conn, _dedupe_act(), embed_fn=_embed)
+
+    hits = retriever.search(conn, "ущерб", k=4, embed_fn=_embed)
+
+    article_numbers = [h.article_no for h in hits]
+    assert len(article_numbers) == len(set(article_numbers))
+    assert len(hits) == 4
