@@ -18,17 +18,24 @@ def _normalize(text: str) -> str:
     return _WS_RE.sub(" ", text).strip()
 
 
-def _split_by_points(text: str) -> list[str]:
-    """Режет по нумерации пунктов; при её отсутствии — по абзацам."""
+def _split_by_points(text: str) -> list[tuple[str | None, str]]:
+    """Режет по нумерации пунктов; при её отсутствии — по абзацам.
+
+    Возвращает пары (номер_пункта, текст). Номер — None для абзацного
+    и одиночного фолбэков, чтобы не выдумывать нумерацию там, где её нет
+    в самом акте (нумерация НПА бывает с пропусками из-за исключённых пунктов).
+    """
     matches = list(_POINT_RE.finditer(text))
     if len(matches) >= 2:
         parts = []
         for i, match in enumerate(matches):
             end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-            parts.append(text[match.start() : end])
+            parts.append((match.group(1), text[match.start() : end]))
         return parts
     paragraphs = [p for p in text.split("\n") if p.strip()]
-    return paragraphs if len(paragraphs) >= 2 else [text]
+    if len(paragraphs) >= 2:
+        return [(None, p) for p in paragraphs]
+    return [(None, text)]
 
 
 def _hard_split(text: str, max_chars: int) -> list[str]:
@@ -64,34 +71,49 @@ def chunk_article(
             )
         ]
 
-    pieces: list[str] = []
-    for part in _split_by_points(article.text):
+    pieces: list[tuple[str | None, str]] = []
+    for point_no, part in _split_by_points(article.text):
         part = _normalize(part)
         if not part:
             continue
         if len(part) + len(header) > max_chars:
-            pieces.extend(_hard_split(part, max_chars - len(header)))
+            # Пункт делится на фрагменты предложениями, но все они —
+            # один и тот же пункт, поэтому номер не меняется.
+            pieces.extend(
+                (point_no, fragment)
+                for fragment in _hard_split(part, max_chars - len(header))
+            )
         else:
-            pieces.append(part)
+            pieces.append((point_no, part))
 
     # Слишком короткие куски приклеиваем к предыдущему — отдельно они бесполезны.
-    merged: list[str] = []
-    for piece in pieces:
+    # Номер пункта берётся от того, к кому приклеиваем, а не от приклеиваемого.
+    merged: list[tuple[str | None, str]] = []
+    for point_no, piece in pieces:
         if merged and len(piece) < min_chars:
-            merged[-1] = f"{merged[-1]} {piece}"
+            prev_no, prev_text = merged[-1]
+            merged[-1] = (prev_no, f"{prev_text} {piece}")
         else:
-            merged.append(piece)
+            merged.append((point_no, piece))
 
-    return [
-        Chunk(
-            article_no=article.number,
-            article_title=article.title,
-            part_no=str(i),
-            anchor=article.anchor,
-            text=f"{header}\n{piece}",
+    chunks = []
+    counter = 0
+    for point_no, piece in merged:
+        if point_no is None:
+            counter += 1
+            part_no = str(counter)
+        else:
+            part_no = point_no
+        chunks.append(
+            Chunk(
+                article_no=article.number,
+                article_title=article.title,
+                part_no=part_no,
+                anchor=article.anchor,
+                text=f"{header}\n{piece}",
+            )
         )
-        for i, piece in enumerate(merged, start=1)
-    ]
+    return chunks
 
 
 def chunk_act(act: Act, max_chars: int = 2000, min_chars: int = 100) -> list[Chunk]:

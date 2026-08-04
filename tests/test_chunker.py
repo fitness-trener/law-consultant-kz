@@ -25,6 +25,14 @@ def test_long_article_splits_by_numbered_points():
     assert all(c.text.startswith("Статья 10. Оплата труда") for c in chunks)
 
 
+def test_long_article_with_gap_in_numbering_keeps_real_point_numbers():
+    """Пункт 2 исключён — номера в part_no не должны идти подряд."""
+    body = "\n".join(f"{i}. " + "норма права. " * 40 for i in (1, 3, 4))
+    chunks = chunk_article(_article(body), max_chars=800)
+    assert len(chunks) > 1
+    assert [c.part_no for c in chunks] == ["1", "3", "4"]
+
+
 def test_long_article_without_numbering_splits_by_paragraphs():
     body = "\n".join("абзац без нумерации. " * 30 for _ in range(4))
     chunks = chunk_article(_article(body), max_chars=700)
@@ -44,6 +52,14 @@ def test_tiny_article_is_kept():
     chunks = chunk_article(_article("Исключена."))
     assert len(chunks) == 1
     assert "Исключена" in chunks[0].text
+
+
+def test_empty_article_produces_header_only_chunk():
+    """Пустой текст статьи не должен приводить к падению — остаётся заголовок."""
+    chunks = chunk_article(_article(""))
+    assert len(chunks) == 1
+    assert chunks[0].part_no is None
+    assert chunks[0].text.strip() == "Статья 10. Оплата труда"
 
 
 def test_article_number_with_suffix_preserved():
