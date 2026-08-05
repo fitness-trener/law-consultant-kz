@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="tabs">
+  <button class="tab active" data-target="pane-chat">Консультация</button>
+  <button class="tab" data-target="pane-doc">Документ</button>
+</nav>
+
+<section id="pane-chat" class="pane">
+  <form hx-post="/chat" hx-target="#answer" hx-indicator="#spinner">
+    <textarea name="question" rows="3" placeholder="Например: обязателен ли письменный трудовой договор?"></textarea>
+    <button type="submit">Спросить</button>
+    <span id="spinner" class="htmx-indicator">Модель думает…</span>
+  </form>
+  <div id="answer"></div>
+</section>
+
+<section id="pane-doc" class="pane" hidden>
+  <form id="upload-form">
+    <input type="file" name="file" accept=".docx,.pdf" required>
+    <button type="submit">Проверить документ</button>
+  </form>
+  <div id="progress" hidden>
+    <progress id="progress-bar" value="0" max="1"></progress>
+    <span id="progress-text"></span>
+  </div>
+  <div id="report"></div>
+</section>
+
+<aside class="corpus">
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% else %}
+    <h2>Загруженные НПА ({{ acts|length }})</h2>
+    <ul>
+      {% for title, revision in acts %}
+        <li>{{ title }} <span class="rev">ред. {{ revision or 'не определена' }}</span></li>
+      {% else %}
+        <li class="empty">Индекс пуст. Выполните: <code>python cli.py scrape &amp;&amp; python cli.py index</code></li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</aside>
+
+<script>
+document.querySelectorAll('.tab').forEach(function (tab) {
+  tab.addEventListener('click', function () {
+    document.querySelectorAll('.tab').forEach(function (t) { t.classList.remove('active'); });
+    document.querySelectorAll('.pane').forEach(function (p) { p.hidden = true; });
+    tab.classList.add('active');
+    document.getElementById(tab.dataset.target).hidden = false;
+  });
+});
+</script>
+
+<script>
+document.getElementById('upload-form').addEventListener('submit', async function (event) {
+  event.preventDefault();
+  var report = document.getElementById('report');
+  var progress = document.getElementById('progress');
+  var bar = document.getElementById('progress-bar');
+  var text = document.getElementById('progress-text');
+  report.innerHTML = '';
+  progress.hidden = false;
+  text.textContent = 'Разбираю документ…';
+
+  var response = await fetch('/analyze', { method: 'POST', body: new FormData(event.target) });
+  if (!response.ok) {
+    progress.hidden = true;
+    report.innerHTML = '<div class="error">' + (await response.json()).detail + '</div>';
+    return;
+  }
+  var jobId = (await response.json()).job_id;
+  var source = new EventSource('/analyze/' + jobId + '/events');
+
+  source.addEventListener('progress', function (e) {
+    var data = JSON.parse(e.data);
+    bar.max = data.total;
+    bar.value = data.done;
+    text.textContent = 'Проверено пунктов: ' + data.done + ' из ' + data.total;
+  });
+  source.addEventListener('done', async function () {
+    source.close();
+    progress.hidden = true;
+    report.innerHTML = await (await fetch('/analyze/' + jobId + '/report')).text();
+  });
+  source.addEventListener('error', async function (e) {
+    source.close();
+    progress.hidden = true;
+    report.innerHTML = await (await fetch('/analyze/' + jobId + '/report')).text();
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,21 @@
+{% if error %}
+  <div class="error">{{ error }}</div>
+  <p class="disclaimer">{{ disclaimer }}</p>
+{% else %}
+  <article class="answer {% if result.refused %}refused{% endif %}">
+    <p class="question">{{ question }}</p>
+    <div class="body">{{ result.answer }}</div>
+    {% if result.sources %}
+      <h3>Источники</h3>
+      <ul class="sources">
+        {% for hit in result.sources %}
+          <li>
+            <a href="{{ hit.link }}" target="_blank" rel="noopener">{{ hit.citation }}</a>
+            {% if hit.revision_date %}<span class="rev">ред. {{ hit.revision_date }}</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+    <p class="disclaimer">{{ disclaimer }}</p>
+  </article>
+{% endif %}

@@ -673,6 +673,11 @@ def embed(texts: list[str]) -> list[list[float]]:
     return vectors
 
 
+def _normalize_model(name: str) -> str:
+    """Ollama отдаёт модели без явного тега как name:latest."""
+    return name if ":" in name else f"{name}:latest"
+
+
 def health_check() -> None:
     """Проверяет, что Ollama на связи и нужные модели загружены."""
     try:
@@ -685,9 +690,9 @@ def health_check() -> None:
             "Запустите её командой: ollama serve"
         ) from exc
 
-    installed = {m["name"] for m in response.json().get("models", [])}
+    installed = {_normalize_model(m["name"]) for m in response.json().get("models", [])}
     for model in (SETTINGS.gen_model, SETTINGS.embed_model):
-        if model not in installed:
+        if _normalize_model(model) not in installed:
             raise LLMError(f"Модель {model} не установлена. Выполните: ollama pull {model}")
 ```
 
@@ -893,6 +898,15 @@ END;
 CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
     INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
 END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_ad_vec AFTER DELETE ON chunks BEGIN
+    DELETE FROM vec_chunks WHERE chunk_id = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON chunks BEGIN
+    INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+    INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+END;
 """
 
 
@@ -1080,6 +1094,16 @@ def test_whitespace_is_normalized():
 Ожидается: FAIL с `ModuleNotFoundError: No module named 'chunker'`
 
 - [ ] **Step 4: Реализовать `chunker.py`**
+
+> **Осторожно: код ниже содержит пять дефектов, найденных при ревью.** Рабочая
+> версия — в `chunker.py` репозитория, ориентируйтесь на неё, а не на этот блок.
+> Что было не так: терялся вводный абзац статьи до пункта «1.»; `part_no`
+> подставлял порядковый счётчик вместо реального номера пункта (в НПА РК
+> нумерация идёт с дырами из-за исключённых пунктов); чанк мог превысить
+> `max_chars` из-за неучтённого перевода строки и склейки короткого хвоста;
+> первый короткий фрагмент не сливался ни с чем; одно предложение длиннее
+> бюджета отдавалось целиком. Инварианты модуля — ни один чанк не длиннее
+> `max_chars` и ни один символ не теряется — закреплены property-тестами.
 
 ```python
 """Нарезка статей НПА на чанки.

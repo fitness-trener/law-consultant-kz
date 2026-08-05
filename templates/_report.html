@@ -1,0 +1,44 @@
+{# Same outer .report container regardless of outcome — a test or user
+   script looking at the report area must find it whether the analysis
+   succeeded, errored, or never finished. Only the inner content and the
+   .error styling on the message itself vary. #}
+<article class="report">
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% elif findings is none %}
+    {# Analysis never finished and produced no error either (e.g. report
+       requested mid-stream). Never show the clean-document message here — that
+       message must only ever mean "we checked and found nothing". #}
+    <div class="error">Анализ ещё не завершён или был прерван без результата.</div>
+  {% else %}
+    <h2>{{ filename }}</h2>
+    <p class="meta">Пунктов проверено: {{ clauses }} · пропущено: {{ skipped }} · находок: {{ findings|length }}</p>
+    {% if findings %}
+      <ol class="findings">
+        {% for f in findings %}
+          <li class="finding risk-{{ f.risk }}">
+            <div class="head">
+              <span class="badge">{{ f.risk }}</span>
+              <span class="clause">пункт {{ f.clause_no }}</span>
+              <a href="{{ f.link }}" target="_blank" rel="noopener">{{ f.norm_ref }}</a>
+            </div>
+            <blockquote>{{ f.quote }}</blockquote>
+            <p class="problem">{{ f.problem }}</p>
+            <p class="suggestion"><strong>Предлагаемая формулировка:</strong> {{ f.suggestion }}</p>
+          </li>
+        {% endfor %}
+      </ol>
+      {% if skipped %}
+        <p class="error">Ещё {{ skipped }} пункт(ов) не удалось оценить — по ним риски не проверены.</p>
+      {% endif %}
+    {% elif skipped %}
+      {# Some clauses failed to get a real verdict (model gave no usable risk,
+         or errored out) — the reassuring clean-document message must never
+         appear here, since "no findings" here does not mean "checked and clean". #}
+      <p class="error">Не удалось оценить {{ skipped }} из {{ clauses }} пункт(ов). Анализ неполный — отсутствие находок здесь не означает отсутствие рисков.</p>
+    {% else %}
+      <p class="clean">Анализ не выявил рисков по загруженным НПА. Это не гарантия — корпус ограничен списком документов ниже.</p>
+    {% endif %}
+  {% endif %}
+  <p class="disclaimer">{{ disclaimer }}</p>
+</article>

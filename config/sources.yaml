@@ -1,0 +1,89 @@
+sources:
+  - key: civil_code_general
+    title: Гражданский кодекс Республики Казахстан (Общая часть)
+    url: https://adilet.zan.kz/rus/docs/K940001000_
+    doc_type: кодекс
+  - key: civil_code_special
+    title: Гражданский кодекс Республики Казахстан (Особенная часть)
+    url: https://adilet.zan.kz/rus/docs/K990000409_
+    doc_type: кодекс
+  - key: labour_code
+    title: Трудовой кодекс Республики Казахстан
+    url: https://adilet.zan.kz/rus/docs/K1500000414
+    doc_type: кодекс
+  # Налоговый кодекс № 214-VIII от 18.07.2025, действует с 01.01.2026.
+  # НК 2017 года (K1700000120) утратил силу — не подключать.
+  - key: tax_code
+    title: Налоговый кодекс Республики Казахстан
+    url: https://adilet.zan.kz/rus/docs/K2500000214
+    doc_type: кодекс
+  - key: admin_offences_code
+    title: Кодекс Республики Казахстан об административных правонарушениях
+    url: https://adilet.zan.kz/rus/docs/K1400000235
+    doc_type: кодекс
+  - key: criminal_code
+    title: Уголовный кодекс Республики Казахстан
+    url: https://adilet.zan.kz/rus/docs/K1400000226
+    doc_type: кодекс
+  - key: criminal_procedure_code
+    title: Уголовно-процессуальный кодекс Республики Казахстан
+    url: https://adilet.zan.kz/rus/docs/K1400000231
+    doc_type: кодекс
+  - key: civil_procedure_code
+    title: Гражданский процессуальный кодекс Республики Казахстан
+    url: https://adilet.zan.kz/rus/docs/K1500000377
+    doc_type: кодекс
+  - key: entrepreneurial_code
+    title: Предпринимательский кодекс Республики Казахстан
+    url: https://adilet.zan.kz/rus/docs/K1500000375
+    doc_type: кодекс
+  - key: land_code
+    title: Земельный кодекс Республики Казахстан
+    url: https://adilet.zan.kz/rus/docs/K030000442_
+    doc_type: кодекс
+  - key: family_code
+    title: Кодекс Республики Казахстан о браке (супружестве) и семье
+    url: https://adilet.zan.kz/rus/docs/K1100000518
+    doc_type: кодекс
+  - key: administrative_procedure_code
+    title: Административный процедурно-процессуальный кодекс Республики Казахстан
+    url: https://adilet.zan.kz/rus/docs/K2000000350
+    doc_type: кодекс
+  - key: llp_law
+    title: О товариществах с ограниченной и дополнительной ответственностью
+    url: https://adilet.zan.kz/rus/docs/Z980000220_
+    doc_type: закон
+  - key: joint_stock_law
+    title: Об акционерных обществах
+    url: https://adilet.zan.kz/rus/docs/Z030000415_
+    doc_type: закон
+  - key: procurement_law
+    title: О государственных закупках
+    url: https://adilet.zan.kz/rus/docs/Z2400000106
+    doc_type: закон
+  - key: personal_data_law
+    title: О персональных данных и их защите
+    url: https://adilet.zan.kz/rus/docs/Z1300000094
+    doc_type: закон
+  - key: consumer_rights_law
+    title: О защите прав потребителей
+    url: https://adilet.zan.kz/rus/docs/Z100000274_
+    doc_type: закон
+  - key: housing_law
+    title: О жилищных отношениях
+    url: https://adilet.zan.kz/rus/docs/Z970000094_
+    doc_type: закон
+  # Закон № 258-VIII от 16.01.2026. Прежний закон 1995 года (Z950002444_)
+  # утратил силу — не подключать.
+  - key: banks_law
+    title: О банках и банковской деятельности в Республике Казахстан
+    url: https://adilet.zan.kz/rus/docs/Z2600000258
+    doc_type: закон
+  - key: permits_law
+    title: О разрешениях и уведомлениях
+    url: https://adilet.zan.kz/rus/docs/Z1400000202
+    doc_type: закон
+  - key: legal_acts_law
+    title: О правовых актах
+    url: https://adilet.zan.kz/rus/docs/Z1600000480
+    doc_type: закон
